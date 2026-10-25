@@ -1,0 +1,793 @@
+{
+  "name": "LinkedIn job capture — milestone 1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "linkedin-job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "bb1f0786-ae93-4891-b348-8aa6e745dc89",
+      "name": "Receive post",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "linkedin-job-milestone-one"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\n\nif (\n  typeof b.text !== 'string' ||\n  !b.text.trim() ||\n  b.text.length > 50000\n) {\n  throw new Error('Provide post text (1–50,000 characters).');\n}\n\nconst text = b.text.trim();\n\nconst emails = [\n  ...new Set(\n    (\n      text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || []\n    ).map(email => email.toLowerCase())\n  )\n];\n\nconst rawLinks = [\n  ...(Array.isArray(b.links)\n    ? b.links.filter(link => typeof link === 'string')\n    : []),\n  ...(text.match(/https?:\\/\\/[^\\s<>\"']+/gi) || [])\n];\n\nconst links = [\n  ...new Set(\n    rawLinks.map(link => link.replace(/[),.;]+$/, ''))\n  )\n].filter(link => /^https?:\\/\\//i.test(link));\n\nfor (const link of Array.isArray(b.links) ? b.links : []) {\n  if (typeof link === 'string' && /^mailto:/i.test(link)) {\n    const address = link.slice(7).split('?')[0];\n\n    if (\n      /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(address) &&\n      !emails.includes(address.toLowerCase())\n    ) {\n      emails.push(address.toLowerCase());\n    }\n  }\n}\n\nconst formCandidates = links.filter(link =>\n  /forms\\.gle|docs\\.google\\.com\\/forms|typeform\\.com|greenhouse\\.io|lever\\.co|ashbyhq\\.com|workday|jotform|\\/apply\\b|\\/application\\b/i.test(link)\n);\n\n// Normalize stylized Unicode headings.\nconst normalizedText = text.normalize('NFKC');\n\nconst lines = normalizedText\n  .split(/\\n/)\n  .map(line => line.trim())\n  .filter(Boolean);\n\nconst rolePattern = /(?<!\\w)(?:(?:senior|junior|jr\\.?|sr\\.?|associate|lead|mid[ -]level|staff|principal)\\s+)?(?:(?:full[ -]?stack|back[ -]?end|front[ -]?end|software|web|mobile|android|ios|flutter|react(?:\\s+native)?|node(?:\\.js)?|mern(?:\\s+stack)?|python|django|fastapi|ASP\\.NET(?:\\s+Core)?|\\.?NET|C#|AI|machine learning|devops|data|QA|SQA|polyglot)(?:\\s*(?:\\/|\\+|&|and)\\s*(?:react|angular|node(?:\\.js)?|nest(?:js)?))?\\s+)+(?:developers?|engineers?|interns?)\\b/ig;\n\n// Prefer hiring/title lines over responsibility bullets.\nconst headings = lines.filter(line =>\n  /hiring|position\\s*:|role\\s*:|job title\\s*:|vacanc/i.test(line)\n);\n\nconst titleLines = [\n  ...headings,\n  ...lines.slice(0, 5).filter(line =>\n    !/^[-•]/.test(line) && line.length < 160\n  )\n];\n\nconst roleCandidates = [\n  ...new Set(\n    titleLines.flatMap(line =>\n      [...line.matchAll(rolePattern)].map(match => match[0])\n    )\n  )\n];\n\nconst role = roleCandidates.length === 1\n  ? roleCandidates[0]\n  : null;\n\n// Experience.\nconst experienceLine = lines.find(line =>\n  /experience/i.test(line) && /\\d/.test(line)\n) || null;\n\nconst experienceMatch = experienceLine?.match(\n  /(\\d+(?:\\.\\d+)?)\\s*(?:(\\+)|[-–]\\s*(\\d+(?:\\.\\d+)?))?\\s*(years?|yrs?|months?)/i\n);\n\nconst experience = experienceMatch\n  ? {\n      minimum: Number(experienceMatch[1]),\n      maximum: experienceMatch[3]\n        ? Number(experienceMatch[3])\n        : null,\n      unit: /month/i.test(experienceMatch[4])\n        ? 'months'\n        : 'years',\n      minimumOnly: !!experienceMatch[2],\n      source: experienceLine\n    }\n  : null;\n\n// Location and work arrangement.\nconst locationLine = lines.find(line =>\n  /\\blocation\\s*:/i.test(line)\n);\n\nconst location = locationLine\n  ? locationLine\n      .split(/location\\s*:/i)[1]\n      .replace(/\\s*\\((?:on[ -]?site|remote|hybrid)\\)/ig, '')\n      .trim()\n  : null;\n\nconst modes = [\n  ...new Set(\n    (\n      normalizedText.match(\n        /\\bon[ -]?site\\b|\\bremote\\b|\\bhybrid\\b/ig\n      ) || []\n    ).map(mode =>\n      /on/i.test(mode) ? 'on-site' : mode.toLowerCase()\n    )\n  )\n];\n\nconst workArrangement = modes.length === 1\n  ? modes[0]\n  : null;\n\n// Skills mentioned in the job post.\nconst skillPatterns = {\n  'Node.js': /\\bnode(?:\\.js|js)?\\b/i,\n  'NestJS': /\\bnest(?:\\.js|js)\\b/i,\n  'React': /\\breact\\b/i,\n  'Angular': /\\bangular\\b/i,\n  'Next.js': /\\bnext(?:\\.js|js)\\b/i,\n  'TypeScript': /\\btypescript\\b/i,\n  'PostgreSQL': /\\bpostgres(?:ql)?\\b/i,\n  'Python': /\\bpython\\b/i,\n  'FastAPI': /\\bfastapi\\b/i,\n  'Flutter': /\\bflutter\\b/i,\n  'React Native': /\\breact native\\b/i,\n  'Docker': /\\bdocker\\b/i,\n  'Django': /\\bdjango\\b/i,\n  'ASP.NET Core': /\\basp\\.net(?:\\s+core)?\\b|(?:^|\\W)\\.net\\b/i,\n  'C#': /\\bc#/i,\n  'Linux': /\\blinux\\b/i,\n  'GitHub Actions': /\\bgithub actions\\b/i,\n  'Azure': /\\bazure\\b/i,\n  'Redis': /\\bredis\\b/i,\n  'RAG': /\\brag\\b/i,\n  'n8n': /\\bn8n\\b/i,\n  'REST APIs': /\\brest(?:ful)?\\s*apis?\\b/i\n};\n\nconst skills = Object.entries(skillPatterns)\n  .filter(([, pattern]) => pattern.test(normalizedText))\n  .map(([name]) => name);\n\n// Select a resume category.\nlet resumeCategory = null;\nlet resumeMatchReason = null;\n\nif (role) {\n  const specializations = [\n    [/devops/i, 'devops'],\n    [/asp\\.net|\\.net|c#/i, 'dotnet'],\n    [/django|fastapi|python/i, 'python'],\n    [/mobile|flutter|android|ios|react native/i, 'mobile'],\n    [/\\bAI\\b|machine learning/i, 'ai']\n  ].filter(([pattern]) => pattern.test(role));\n\n  if (specializations.length === 1) {\n    resumeCategory = specializations[0][1];\n    resumeMatchReason = 'Specialization in role title';\n  } else if (\n    specializations.length === 0 &&\n    /full[ -]?stack|mern|back[ -]?end|front[ -]?end|node|react|web|software|polyglot/i.test(role)\n  ) {\n    const frameworkSignals = [\n      [/\\bdjango\\b|\\bfastapi\\b/i, 'python'],\n      [/asp\\.net|(?:^|\\W)\\.net\\b/i, 'dotnet'],\n      [/\\bflutter\\b|react native/i, 'mobile']\n    ].filter(([pattern]) => pattern.test(normalizedText));\n\n    if (/node|mern/i.test(role)) {\n      resumeCategory = 'fullstack';\n      resumeMatchReason = 'Node/MERN role';\n    } else if (frameworkSignals.length === 1) {\n      resumeCategory = frameworkSignals[0][1];\n      resumeMatchReason =\n        'One specialized framework in broad role post';\n    } else if (frameworkSignals.length === 0) {\n      resumeCategory = 'fullstack';\n      resumeMatchReason = 'General web/full-stack role';\n    }\n  }\n}\n\nconst profile = {\n  name: 'Muneeb Ur Rehman'\n};\n\n// Paths refer to the mounted directory INSIDE the n8n container.\nconst resumeCatalog = [\n  {\n    id: 'fullstack',\n    category: 'fullstack',\n    fileName: 'Muneeb_Resume_FullStack.pdf',\n    path: '/files/resumes/Muneeb_Resume_FullStack.pdf',\n    skills: [\n      'Node.js',\n      'NestJS',\n      'React',\n      'Next.js',\n      'TypeScript',\n      'Python',\n      'FastAPI',\n      'PostgreSQL',\n      'Docker',\n      'REST APIs'\n    ],\n    summary:\n      'My work includes a multi-tenant Document Intelligence platform using Next.js, FastAPI and Azure, and Stratos, built with NestJS, Next.js and PostgreSQL.'\n  },\n  {\n    id: 'ai',\n    category: 'ai',\n    fileName: 'Muneeb_Resume_AI_Engineer.pdf',\n    path: '/files/resumes/Muneeb_Resume_AI_Engineer.pdf',\n    skills: [\n      'Python',\n      'TypeScript',\n      'FastAPI',\n      'Node.js',\n      'NestJS',\n      'React',\n      'Next.js',\n      'Docker',\n      'PostgreSQL',\n      'REST APIs',\n      'RAG',\n      'n8n'\n    ],\n    summary:\n      'My projects include a voice-enabled RAG assistant, a function-calling voice receptionist, and AI vision and document-processing services.'\n  },\n  {\n    id: 'devops',\n    category: 'devops',\n    fileName: 'Muneeb_Resume_DevOps.pdf',\n    path: '/files/resumes/Muneeb_Resume_DevOps.pdf',\n    skills: [\n      'Linux',\n      'Docker',\n      'GitHub Actions',\n      'Azure',\n      'Python',\n      'FastAPI',\n      'PostgreSQL',\n      'Redis',\n      'Django'\n    ],\n    summary:\n      'My work includes multi-stage Docker builds, Docker Compose health checks, GitHub Actions workflows, and deployments integrating Azure services.'\n  },\n  {\n    id: 'python',\n    category: 'python',\n    fileName: 'Muneeb_Resume_Django.pdf',\n    path: '/files/resumes/Muneeb_Resume_Django.pdf',\n    skills: [\n      'Python',\n      'Django',\n      'FastAPI',\n      'PostgreSQL',\n      'Redis',\n      'Docker',\n      'REST APIs',\n      'React',\n      'Next.js',\n      'Node.js',\n      'NestJS'\n    ],\n    summary:\n      'My projects include Django and FastAPI microservices, a Django LLM chatbot, and a real-time chat application using Django Channels and Redis.'\n  },\n  {\n    id: 'mobile',\n    category: 'mobile',\n    fileName: 'Muneeb_Resume_Flutter_Mobile.pdf',\n    path: '/files/resumes/Muneeb_Resume_Flutter_Mobile.pdf',\n    skills: [\n      'Flutter',\n      'React Native',\n      'Dart',\n      'Node.js',\n      'NestJS',\n      'FastAPI',\n      'React',\n      'Next.js',\n      'PostgreSQL',\n      'Docker',\n      'REST APIs'\n    ],\n    summary:\n      'My work includes a React Native competitive gaming platform and Flutter applications using Riverpod and BLoC, backed by REST APIs.'\n  },\n  {\n    id: 'dotnet',\n    category: 'dotnet',\n    fileName: 'Muneeb_Ur_Rehman_ASP.NET.pdf',\n    path: '/files/resumes/Muneeb_Ur_Rehman_ASP.NET.pdf',\n    skills: [\n      'ASP.NET Core',\n      'C#',\n      'Node.js',\n      'NestJS',\n      'React',\n      'Next.js',\n      'FastAPI',\n      'PostgreSQL',\n      'Docker',\n      'REST APIs'\n    ],\n    summary:\n      'My ClassMate AI project uses ASP.NET Core and Next.js with PostgreSQL, Google OAuth and an AI study-guide generation pipeline.'\n  }\n];\n\nconst selectedResume = resumeCatalog.find(\n  resume => resume.category === resumeCategory\n) || null;\n\nconst reviewReasons = [];\n\nif (!role) {\n  reviewReasons.push(\n    roleCandidates.length > 1\n      ? 'Multiple role titles detected; choose one.'\n      : 'Role title needs review.'\n  );\n}\n\nif (emails.length !== 1) {\n  reviewReasons.push(\n    'Choose and verify the application recipient.'\n  );\n}\n\nif (formCandidates.length && emails.length) {\n  reviewReasons.push(\n    'Both email and form are present; choose the application method.'\n  );\n}\n\nif (!selectedResume) {\n  reviewReasons.push(\n    'No unambiguous resume match; choose a resume manually.'\n  );\n}\n\nif (selectedResume) {\n  reviewReasons.push(\n    'Resume selected from catalogue; file existence and attachment loading have not been verified.'\n  );\n}\n\nif (experience) {\n  reviewReasons.push(\n    'Check your experience against the requirement; no eligibility decision has been made.'\n  );\n}\n\n// Mention only job skills also listed in the selected resume.\nconst overlappingSkills = skills.filter(skill =>\n  (selectedResume?.skills || []).includes(skill)\n);\n\nconst emailDraft = role && emails.length === 1\n  ? {\n      to: emails[0],\n      subject: 'Application for ' + role,\n      body:\n        'Dear Hiring Team,\\n\\n' +\n        'I would like to apply for the ' +\n        role +\n        ' position advertised on LinkedIn.' +\n        (\n          overlappingSkills.length\n            ? ' My skills include ' +\n              overlappingSkills.join(', ') +\n              '.'\n            : ''\n        ) +\n        (\n          selectedResume?.summary\n            ? ' ' + selectedResume.summary\n            : ''\n        ) +\n        '\\n\\nI would welcome the opportunity to discuss my background and suitability for the role.' +\n        '\\n\\nRegards,\\n' +\n        profile.name,\n      attachment: selectedResume?.fileName || null,\n      attachmentPath: selectedResume?.path || null,\n      attachmentLoaded: false,\n      status: 'review_required'\n    }\n  : null;\n\nconst route =\n  emails.length && formCandidates.length\n    ? 'email_and_form'\n    : emails.length\n      ? 'email'\n      : formCandidates.length\n        ? 'form'\n        : 'needs_review';\n\nreturn [\n  {\n    json: {\n      ok: true,\n      parserVersion: '0.3.0',\n      roleCandidate: role,\n      roleCandidates,\n      experience,\n      location,\n      workArrangement,\n      skills,\n      resumeCategory,\n      resumeMatchReason,\n      selectedResume,\n      emailDraft,\n      reviewReasons,\n      emails,\n      formCandidates,\n      otherLinks: links.filter(\n        link => !formCandidates.includes(link)\n      ),\n      route,\n      postUrl: typeof b.url === 'string' ? b.url : null,\n      text,\n      normalizedText,\n      capturedAt: b.capturedAt || null,\n      receivedAt: new Date().toISOString(),\n      note:\n        'Rule-based extraction and draft only. No application sent. Resume metadata selected; PDF not loaded as an attachment.'\n    }\n  }\n];"
+      },
+      "id": "d1629767-72fa-45c8-a9b8-6994279791b7",
+      "name": "Extract candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "d846ec07-ba3c-46d1-a03b-fb2a4f03c216",
+      "name": "Return result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2384,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $('Extract candidates').first().json.selectedResume.path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1152,
+        32
+      ],
+      "id": "fd69ebbf-b641-4900-8d8c-24d31b622d20",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $('Extract candidates').first().json.emailDraft.subject }}",
+        "message": "={{ $('Extract candidates').first().json.emailDraft.body }}",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "data"
+              }
+            ]
+          },
+          "sendTo": "={{ $('Extract candidates').first().json.emailDraft.to }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1344,
+        48
+      ],
+      "id": "79e45f04-6de7-4a7a-8ce1-111dbd6409aa",
+      "name": "Create a draft",
+      "webhookId": "cd42e6f3-28ac-4b8b-a975-0c846f0a2f0d",
+      "notesInFlow": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YMCWcCwYoqgyQRk5",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "3fd40d9c-a9b5-4fb7-ac38-453655f72930",
+              "leftValue": "={{ Boolean($json['Job Link']) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        688,
+        0
+      ],
+      "id": "b4925c60-2acc-411d-8bd4-7fedca49d6bd",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    ok: true,\n    status: 'skipped_duplicate',\n    message: 'This post already exists in your tracker. No new draft created.',\n    postUrl: $('Extract candidates').first().json.postUrl,\n    existingStatus: $json.Status || null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -176
+      ],
+      "id": "95d05cfb-0270-430e-b6bb-f121604ee0a8",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA",
+          "mode": "list",
+          "cachedResultName": "Pakistan Job Application Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 876982096,
+          "mode": "list",
+          "cachedResultName": "Applications",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit#gid=876982096"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job Link": "={{ $('Extract candidates').first().json.postUrl }}",
+            "Role": "={{ $('Extract candidates').first().json.roleCandidate }}",
+            "Application Channel": "Email",
+            "Referral / Contact": "={{ $('Extract candidates').first().json.emailDraft.to }}",
+            "Status": "Processing",
+            "Location": "={{ $('Extract candidates').first().json.location ?? '' }}",
+            "Date Found": "={{ $now.setZone('Asia/Karachi').toFormat('yyyy-MM-dd') }}",
+            "Notes": "=Draft creation started; execution: {{ $execution.id }}"
+          },
+          "matchingColumns": [
+            "Job Link"
+          ],
+          "schema": [
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Role",
+              "displayName": "Role",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Job Link",
+              "displayName": "Job Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Application Channel",
+              "displayName": "Application Channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Found",
+              "displayName": "Date Found",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Applied",
+              "displayName": "Date Applied",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Referral / Contact",
+              "displayName": "Referral / Contact",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Follow-up Date",
+              "displayName": "Follow-up Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tier",
+              "displayName": "Tier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Location",
+              "displayName": "Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        960,
+        16
+      ],
+      "id": "ac59d402-055d-4d7f-bc15-18faef970bb8",
+      "name": "Processing Row",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SNxTMeo6HmAkfpGT",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA",
+          "mode": "list",
+          "cachedResultName": "Pakistan Job Application Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 876982096,
+          "mode": "list",
+          "cachedResultName": "Applications",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit#gid=876982096"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job Link": "={{ $('Extract candidates').first().json.postUrl }}",
+            "Role": "={{ $('Extract candidates').first().json.roleCandidate }}",
+            "Application Channel": "Email",
+            "Date Found": "={{ $now.setZone('Asia/Karachi').toFormat('yyyy-MM-dd') }}",
+            "Referral / Contact": "={{ $('Extract candidates').first().json.emailDraft.to }}",
+            "Status": "Draft created",
+            "Location": "={{ $('Extract candidates').first().json.location ?? '' }}",
+            "Notes": "={{ 'Resume: ' + $('Extract candidates').first().json.selectedResume.fileName\n   + '; Gmail draft ID: ' + $('Create a draft').first().json.id\n   + '; execution: ' + $execution.id }}"
+          },
+          "matchingColumns": [
+            "Job Link"
+          ],
+          "schema": [
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Role",
+              "displayName": "Role",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Job Link",
+              "displayName": "Job Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Application Channel",
+              "displayName": "Application Channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Found",
+              "displayName": "Date Found",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Applied",
+              "displayName": "Date Applied",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Referral / Contact",
+              "displayName": "Referral / Contact",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Follow-up Date",
+              "displayName": "Follow-up Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tier",
+              "displayName": "Tier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Location",
+              "displayName": "Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1584,
+        -48
+      ],
+      "id": "04d5cae3-8400-44b8-adac-f85146988be4",
+      "name": "Status Draft Created",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SNxTMeo6HmAkfpGT",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA",
+          "mode": "list",
+          "cachedResultName": "Pakistan Job Application Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 876982096,
+          "mode": "list",
+          "cachedResultName": "Applications",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit#gid=876982096"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Job Link",
+              "lookupValue": "={{ $('Extract candidates').first().json.postUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        464,
+        0
+      ],
+      "id": "142929a1-0218-41dc-9919-e3ea63bfbd02",
+      "name": "Duplicate Check",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SNxTMeo6HmAkfpGT",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $json.error;\n\nreturn [{\n  json: {\n    postUrl: $('Extract candidates').first().json.postUrl,\n    reason:\n      (typeof error === 'string' ? error : error?.message)\n      || $json.message\n      || 'Gmail draft creation failed.'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1584,
+        144
+      ],
+      "id": "299fd164-c83e-4ba2-96b0-e77746e163fe",
+      "name": "Capture Gmail failure"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA",
+          "mode": "list",
+          "cachedResultName": "Pakistan Job Application Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 876982096,
+          "mode": "list",
+          "cachedResultName": "Applications",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit#gid=876982096"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Job Link",
+              "lookupValue": "={{ $json.postUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1808,
+        144
+      ],
+      "id": "d25e6639-30c5-4ade-a13a-723f1580d17f",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SNxTMeo6HmAkfpGT",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const failure = $('Capture Gmail failure').first().json;\n\nreturn [{\n  json: {\n    ok: false,\n    status: 'gmail_failed',\n    message: 'Gmail failed. The tracker row was removed.',\n    error: failure.reason,\n    postUrl: failure.postUrl,\n    trackerRowRemoved: true\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        128
+      ],
+      "id": "79824b08-b2e6-4aa6-a5f5-c7449c70d8b5",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "documentId": {
+          "__rl": true,
+          "value": "1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA",
+          "mode": "list",
+          "cachedResultName": "Pakistan Job Application Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 876982096,
+          "mode": "list",
+          "cachedResultName": "Applications",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA/edit#gid=876982096"
+        },
+        "startIndex": "={{ $json.row_number }}"
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2000,
+        144
+      ],
+      "id": "2110a32f-bbb0-481a-8c5d-2e0ca8d32a5f",
+      "name": "Delete Processing Status",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SNxTMeo6HmAkfpGT",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive post": {
+      "main": [
+        [
+          {
+            "node": "Extract candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract candidates": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Create a draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a draft": {
+      "main": [
+        [
+          {
+            "node": "Status Draft Created",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Capture Gmail failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Processing Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processing Row": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status Draft Created": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Gmail failure": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Delete Processing Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Processing Status": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "83e3b7d7-a7d9-4dae-81c3-2c7eb20df7f1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "470064cca0545d962c1641bb00a84708af3231a7c0fecdd223d2c541b99dde55"
+  },
+  "nodeGroups": [],
+  "id": "DQXiUxhdd3pQXiKR",
+  "tags": []
+}
