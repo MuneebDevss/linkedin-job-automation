@@ -1,0 +1,78 @@
+{
+  "answers": [
+    {
+      "questionId": "full-name",
+      "question": "Applicant Name",
+      "fieldType": "text",
+      "value": "Muneeb Ur Rehman",
+      "confidence": "high",
+      "matchedField": "name",
+      "provenance": {
+        "source": "verified_profile",
+        "detail": "Matched verified profile field name.",
+        "profileField": "name"
+      }
+    },
+    {
+      "questionId": "email",
+      "question": "Email Address",
+      "fieldType": "text",
+      "value": "munib.urehmann@gmail.com",
+      "confidence": "high",
+      "matchedField": "email",
+      "provenance": {
+        "source": "verified_profile",
+        "detail": "Matched verified profile field email.",
+        "profileField": "email"
+      }
+    },
+    {
+      "questionId": "salary",
+      "question": "Expected monthly salary (PKR)",
+      "fieldType": "number",
+      "value": null,
+      "confidence": "low",
+      "matchedField": "salary",
+      "provenance": {
+        "source": "unresolved",
+        "detail": "No reliable profile, approved, derived, or Gemini answer was available."
+      }
+    },
+    {
+      "questionId": "skills",
+      "question": "Key skills",
+      "fieldType": "checkbox",
+      "value": ["Node.js", "TypeScript"],
+      "confidence": "high",
+      "matchedField": "strengths",
+      "provenance": {
+        "source": "verified_profile",
+        "detail": "Matched verified profile field strengths.",
+        "profileField": "strengths"
+      }
+    },
+    {
+      "questionId": "motivation",
+      "question": "Why are you interested in this role?",
+      "fieldType": "long_text",
+      "value": "I am interested in applying my Node.js, NestJS, React and TypeScript experience to build useful product features with this team.",
+      "confidence": "medium",
+      "matchedField": "motivation",
+      "provenance": {
+        "source": "gemini",
+        "model": "configured Gemini model",
+        "detail": "Derived from the role requirements and selected full-stack resume."
+      }
+    }
+  ],
+  "resume": {
+    "resume": {
+      "id": "fullstack",
+      "fileName": "Muneeb_Resume_FullStack.pdf",
+      "path": "/files/resumes/Muneeb_Resume_FullStack.pdf"
+    },
+    "confidence": "high"
+  },
+  "conflicts": [],
+  "priority": ["verified_profile", "approved_suggestion", "deterministic", "gemini", "unresolved"]
+}

@@ -1,8 +1,10 @@
 .env
 .env.*
+!backend/.env.example
 __pycache__/
 *.py[cod]
 backend/node_modules/
 backend/dist/
 backend/coverage/
-backend/data/
+backend/data/*
+!backend/data/profile.json

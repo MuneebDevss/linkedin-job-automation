@@ -32,6 +32,14 @@ Shortened `lnkd.in` URLs remain visible in the editable preview and are resolved
 
 Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For form applications, it returns a durable form job ID with `pending` status. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch.
 
+## Profile-based form answers
+
+The backend now exposes `POST /api/forms/answers` for answer generation only. It does not fill or submit forms. The engine matches common question variants, selects a resume from the existing catalog, and applies this strict order: verified profile → approved reusable answer → deterministic derivation → Gemini → unresolved.
+
+Review [the local profile](backend/data/profile.json) before use. Existing supplied values are retained; unknown phone, CGPA, employment, availability, relocation, experience, work authorization, and salary amounts intentionally remain `null`. Fill only values you have verified. Salary entries are separated by seniority, currency, and monthly/annual period.
+
+Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in the environment before starting Compose. Gemini suggestions are saved separately as unapproved suggestions and are never allowed to overwrite verified fields. The [API documentation](backend/API.md) contains the schema and [sample request](backend/examples/form-answers.input.json) and [sample output](backend/examples/form-answers.output.json).
+
 ## 5. Test without LinkedIn first
 Paste the following into the extension text box, add any sample URL, ensure the backend and published n8n workflow are running, then send:
 

@@ -1,0 +1,15 @@
+{
+  "job": {
+    "title": "Junior Full Stack Developer",
+    "description": "Build Node.js, NestJS, React and TypeScript applications for our product team.",
+    "seniority": "entry",
+    "currency": "PKR"
+  },
+  "questions": [
+    {"id": "full-name", "label": "Applicant Name", "type": "text", "required": true},
+    {"id": "email", "label": "Email Address", "type": "text", "required": true},
+    {"id": "salary", "label": "Expected monthly salary (PKR)", "type": "number", "currency": "PKR", "salaryPeriod": "monthly"},
+    {"id": "skills", "label": "Key skills", "type": "checkbox", "options": ["Node.js", "TypeScript", "Java"]},
+    {"id": "motivation", "label": "Why are you interested in this role?", "type": "long_text"}
+  ]
+}

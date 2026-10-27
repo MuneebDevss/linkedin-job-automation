@@ -32,6 +32,31 @@ The response contains `applicationId`, classification `method`, normalized desti
 
 Returns the stored classification and workflow statuses. URL-encode application IDs containing colons before constructing the request URL.
 
+## `POST /api/forms/answers`
+
+Generates answers only; it does not open a browser, fill a form, or submit an application. The request contains a job context and 1–100 questions. Supported `type` values are `text`, `number`, `date`, `radio`, `checkbox`, `select`, and `long_text`.
+
+See [the sample request](examples/form-answers.input.json) and [sample response](examples/form-answers.output.json). The response always follows this priority:
+
+1. verified values from `data/profile.json`;
+2. approved, compatible reusable answers;
+3. deterministic derivation;
+4. Gemini;
+5. an explicit unresolved answer with a `null` value.
+
+Each answer includes its original question ID, validated value, confidence, and provenance. Gemini receives only unresolved questions plus the job description, verified profile structure, and the selected resume metadata. Malformed Gemini output is rejected locally.
+
+Salary questions require an identifiable seniority, currency, and `monthly` or `annual` period. The engine uses only the exact matching profile amount, or records an explicit ×12/÷12 deterministic derivation. It never performs an exchange-rate conversion. Unknown salary values stay unresolved and Gemini is instructed not to invent them.
+
+Gemini-generated reusable answers are atomically appended to `generatedSuggestions` with `approved: false`. To reuse one, review it in `data/profile.json`, move it to `approvedReusableAnswers`, and set `approved` to `true`. Generated answers never overwrite `verified` fields.
+
+The profile engine uses:
+
+- `PROFILE_PATH` and `PROFILE_TEMPLATE_PATH` for profile storage and first-run initialization;
+- `GEMINI_API_KEY` for credentials;
+- `GEMINI_MODEL` for the model name;
+- `GEMINI_TIMEOUT_MS` for the request deadline.
+
 ## Errors
 
 Errors use this structure:

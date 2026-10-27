@@ -8,6 +8,11 @@ export interface AppConfiguration {
   n8nTimeoutMs: number;
   urlResolutionTimeoutMs: number;
   apiToken: string;
+  profilePath: string;
+  profileTemplatePath: string;
+  geminiApiKey: string;
+  geminiModel: string;
+  geminiTimeoutMs: number;
 }
 
 function integer(name: string, fallback: number): number {
@@ -40,6 +45,11 @@ export default (): AppConfiguration => {
     n8nWebhookUrl: localHttpUrl('N8N_WEBHOOK_URL', 'http://127.0.0.1:5678/webhook/linkedin-job'),
     n8nTimeoutMs: integer('N8N_TIMEOUT_MS', 20000),
     urlResolutionTimeoutMs: integer('URL_RESOLUTION_TIMEOUT_MS', 8000),
-    apiToken: process.env.API_TOKEN || ''
+    apiToken: process.env.API_TOKEN || '',
+    profilePath: resolve(process.env.PROFILE_PATH || './data/profile.json'),
+    profileTemplatePath: resolve(process.env.PROFILE_TEMPLATE_PATH || './data/profile.json'),
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+    geminiTimeoutMs: integer('GEMINI_TIMEOUT_MS', 30000)
   };
 };
