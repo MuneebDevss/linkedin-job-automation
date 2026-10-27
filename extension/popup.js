@@ -66,9 +66,7 @@ function isSafeResolvedUrl(value) {
   }
 }
 
-async function resolveShortLink(original, webhookValue) {
-  // Resolution stays on the configured local backend. The extension never
-  // follows an untrusted redirect itself and keeps the short URL on failure.
+async function resolveWithBackend(original, webhookValue) {
   let timeout;
   try {
     const controller = new AbortController();
@@ -88,6 +86,47 @@ async function resolveShortLink(original, webhookValue) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function resolveFromLinkedInInterstitial(original) {
+  // lnkd.in commonly returns a 200 safety-interstitial page instead of a 3xx
+  // redirect. Fetch only the allowlisted short-link host, without credentials,
+  // then read LinkedIn's explicitly marked outbound link.
+  let timeout;
+  try {
+    const source = new URL(original);
+    if (source.protocol !== 'https:' || source.hostname.toLowerCase() !== 'lnkd.in') return original;
+
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(source.href, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+      referrerPolicy: 'no-referrer',
+      signal: controller.signal
+    });
+    if (!response.ok) return original;
+
+    const redirected = normalizeUrl(response.url || '');
+    if (redirected && !isShortLinkedInUrl(redirected) && isSafeResolvedUrl(redirected)) return redirected;
+
+    const document = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const outbound = document.querySelector('a[data-tracking-control-name="external_url_click"][href]')?.href;
+    const resolved = normalizeUrl(outbound || '');
+    return resolved && isSafeResolvedUrl(resolved) ? resolved : original;
+  } catch {
+    return original;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveShortLink(original, webhookValue) {
+  const backendResult = await resolveWithBackend(original, webhookValue);
+  if (backendResult !== original) return backendResult;
+  return resolveFromLinkedInInterstitial(original);
 }
 
 async function resolveShortLinks(links, webhookValue) {

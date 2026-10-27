@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Job Post \u2192 n8n",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Automatically preview one LinkedIn post and manually send it to local n8n.",
   "permissions": [
     "activeTab",
@@ -10,7 +10,8 @@
   ],
   "host_permissions": [
     "http://localhost:5678/*",
-    "http://127.0.0.1:5678/*"
+    "http://127.0.0.1:5678/*",
+    "https://lnkd.in/*"
   ],
   "action": {
     "default_popup": "popup.html"

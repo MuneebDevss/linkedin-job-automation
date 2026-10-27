@@ -96,7 +96,7 @@ for (const link of Array.isArray(b.links) ? b.links : []) {
   }
 }
 
-const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform\.com|tally\.so|airtable\.com\/shr|jotform|greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|smartrecruiters|bamboohr|breezy\.hr|recruitee|zohorecruit|jazzhr|myworkdayjobs|workday|\/apply\b|\/application\b/i;
+const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform\.com|tally\.so|airtable\.com\/shr|jotform|greenhouse\.io|lever\.co|ashbyhq\.com|evahires\.com\/jobs|workable\.com|smartrecruiters|bamboohr|breezy\.hr|recruitee|zohorecruit|jazzhr|myworkdayjobs|workday|\/apply\b|\/application\b/i;
 const formCandidates = links.filter(link => FORM_RE.test(link));
 
 // Pick ONE recipient when the post lists several emails.
