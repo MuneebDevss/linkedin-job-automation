@@ -2,3 +2,7 @@
 .env.*
 __pycache__/
 *.py[cod]
+backend/node_modules/
+backend/dist/
+backend/coverage/
+backend/data/

@@ -11,10 +11,11 @@
 </style>
 <h2>Job Post → n8n</h2>
 <p>Select a job post (and expand “see more” if needed), then open this popup. Links are optional. The preview is captured automatically and is never sent until you click Send.</p>
-<label>Local webhook URL<input id="url" value="http://localhost:5678/webhook-test/linkedin-job"></label>
+<label>Local backend URL<input id="url" value="http://127.0.0.1:3000/api/jobs/process"></label>
+<label>Backend API token (when configured)<input id="token" type="password" autocomplete="off"></label>
 <label>Post URL<input id="postUrl"></label>
 <label>Preview / edit post text<textarea id="text"></textarea></label>
 <label>Application links (one per line)<textarea id="links" style="height:70px"></textarea></label>
-<button id="send" disabled>Send to n8n</button>
+<button id="send" disabled>Send</button>
 <pre id="result" role="status" aria-live="polite">Detecting the selected post…</pre>
 <script src="popup.js"></script>

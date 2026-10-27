@@ -45,97 +45,6 @@ function isShortLinkedInUrl(value) {
   }
 }
 
-function resolverUrl(webhookValue) {
-  const url = new URL(webhookValue);
-  url.pathname = url.pathname.replace(/\/linkedin-job\/?$/, '/resolve-url');
-  url.search = '';
-  url.hash = '';
-  return url.href;
-}
-
-function isSafeResolvedUrl(value) {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'https:' || url.username || url.password) return false;
-    const host = url.hostname.toLowerCase();
-    return host !== 'localhost' && host !== '0.0.0.0' && host !== '::1' &&
-      !/^127\./.test(host) && !/^10\./.test(host) && !/^192\.168\./.test(host) &&
-      !/^169\.254\./.test(host) && !/^172\.(1[6-9]|2\d|3[01])\./.test(host);
-  } catch {
-    return false;
-  }
-}
-
-async function resolveWithBackend(original, webhookValue) {
-  let timeout;
-  try {
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), 3000);
-    const response = await fetch(resolverUrl(webhookValue), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url: original}),
-      signal: controller.signal
-    });
-    if (!response.ok) return original;
-    const body = await response.json();
-    const resolved = normalizeUrl(body.resolvedUrl || body.url || '');
-    return resolved && isSafeResolvedUrl(resolved) ? resolved : original;
-  } catch {
-    return original;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function resolveFromLinkedInInterstitial(original) {
-  // lnkd.in commonly returns a 200 safety-interstitial page instead of a 3xx
-  // redirect. Fetch only the allowlisted short-link host, without credentials,
-  // then read LinkedIn's explicitly marked outbound link.
-  let timeout;
-  try {
-    const source = new URL(original);
-    if (source.protocol !== 'https:' || source.hostname.toLowerCase() !== 'lnkd.in') return original;
-
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), 8000);
-    const response = await fetch(source.href, {
-      method: 'GET',
-      credentials: 'omit',
-      cache: 'no-store',
-      redirect: 'follow',
-      referrerPolicy: 'no-referrer',
-      signal: controller.signal
-    });
-    if (!response.ok) return original;
-
-    const redirected = normalizeUrl(response.url || '');
-    if (redirected && !isShortLinkedInUrl(redirected) && isSafeResolvedUrl(redirected)) return redirected;
-
-    const document = new DOMParser().parseFromString(await response.text(), 'text/html');
-    const outbound = document.querySelector('a[data-tracking-control-name="external_url_click"][href]')?.href;
-    const resolved = normalizeUrl(outbound || '');
-    return resolved && isSafeResolvedUrl(resolved) ? resolved : original;
-  } catch {
-    return original;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function resolveShortLink(original, webhookValue) {
-  const backendResult = await resolveWithBackend(original, webhookValue);
-  if (backendResult !== original) return backendResult;
-  return resolveFromLinkedInInterstitial(original);
-}
-
-async function resolveShortLinks(links, webhookValue) {
-  const resolved = await Promise.all(links.map(link =>
-    isShortLinkedInUrl(link) ? resolveShortLink(link, webhookValue) : link
-  ));
-  return normalizeLinks(resolved);
-}
-
 async function activePageTab() {
   const [tab] = await api.tabs.query({active: true, currentWindow: true});
   if (!tab?.url || !/^https?:\/\//i.test(tab.url)) {
@@ -163,7 +72,7 @@ async function captureOnOpen() {
     const result = await requestCapture(tab);
     if (!result?.ok) throw new Error(result?.error || 'The selected LinkedIn post could not be captured.');
 
-    const links = await resolveShortLinks(normalizeLinks(result.capture.links || []), $('url').value);
+    const links = normalizeLinks(result.capture.links || []);
     $('text').value = result.capture.text;
     $('postUrl').value = result.capture.url || tab.url;
     $('links').value = links.join('\n');
@@ -171,7 +80,7 @@ async function captureOnOpen() {
 
     const unresolved = links.filter(isShortLinkedInUrl).length;
     show(unresolved
-      ? `Captured. ${unresolved} shortened link(s) could not be resolved and were kept unchanged. Review before sending.`
+      ? `Captured. ${unresolved} shortened link(s) will be resolved safely by the backend when you click Send.`
       : 'Captured automatically. Review the text, URL, and links before sending.');
   } catch (error) {
     show(error.message);
@@ -184,18 +93,22 @@ $('send').onclick = async () => {
   $('send').disabled = true;
   try {
     const url = new URL($('url').value);
-    if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname) || url.port !== '5678' || !/^\/webhook(?:-test)?\/linkedin-job\/?$/.test(url.pathname)) {
-      throw new Error('This starter supports only the local n8n linkedin-job webhook on port 5678.');
+    if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname) || !/^\/api\/jobs\/process\/?$/.test(url.pathname)) {
+      throw new Error('Use the local backend endpoint, for example http://127.0.0.1:3000/api/jobs/process.');
     }
     const text = $('text').value.trim();
     if (!text) throw new Error('No post text is available. Select one LinkedIn post and reopen the popup, or paste text into the preview.');
 
     const links = normalizeLinks($('links').value.split('\n'));
     $('links').value = links.join('\n');
-    await api.storage.local.set({webhookUrl: url.href});
+    const apiToken = $('token').value.trim();
+    await api.storage.local.set({backendUrl: url.href, backendApiToken: apiToken});
     const response = await fetch(url.href, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiToken ? {'X-API-Key': apiToken} : {})
+      },
       body: JSON.stringify({
         text,
         url: $('postUrl').value.trim(),
@@ -204,18 +117,22 @@ $('send').onclick = async () => {
       }),
       signal: AbortSignal.timeout(20000)
     });
-    if (!response.ok) throw new Error(`n8n returned HTTP ${response.status}. For a test URL, click Listen for test event first.`);
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null);
+      throw new Error(errorBody?.error?.message || `Backend returned HTTP ${response.status}.`);
+    }
     show(JSON.stringify(await response.json(), null, 2));
   } catch (error) {
-    show(`${error.message}\nIf connection failed: start n8n and check its webhook listener.`);
+    show(`${error.message}\nIf connection failed: start the backend and n8n services.`);
   } finally {
     $('send').disabled = false;
   }
 };
 
-api.storage.local.get('webhookUrl')
+api.storage.local.get(['backendUrl', 'backendApiToken'])
   .then(settings => {
-    if (settings.webhookUrl) $('url').value = settings.webhookUrl;
+    if (settings.backendUrl) $('url').value = settings.backendUrl;
+    if (settings.backendApiToken) $('token').value = settings.backendApiToken;
   })
   .catch(() => {})
   .finally(captureOnOpen);
