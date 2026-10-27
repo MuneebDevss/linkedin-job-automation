@@ -68,6 +68,29 @@ const DEFINITIONS: FieldDefinition[] = [
     patterns: [/(?:willing|able|open).*(?:relocat)/, /relocation/], types: ['radio', 'select', 'checkbox', 'text']
   },
   {
+    key: 'onsiteWork', aliases: ['willing to work onsite', 'comfortable working onsite', 'available for onsite work', 'can you work onsite'],
+    patterns: [/(?:willing|comfortable|available|able).*(?:on[ -]?site|in office)/, /(?:on[ -]?site|in office).*(?:work|available)/],
+    types: ['radio', 'select', 'checkbox', 'text']
+  },
+  {
+    key: 'shiftAvailability', aliases: ['willing to work night shifts', 'night shift availability', 'flexible shifts', 'shift availability'],
+    patterns: [/(?:willing|available|able).*(?:night|evening|different|rotating|flexible).*(?:shift|hours)/,
+      /(?:night|evening|rotating) shift/], types: ['radio', 'select', 'checkbox', 'text']
+  },
+  {
+    key: 'flexibleHours', aliases: ['flexible working hours', 'flexible work hours', 'flexible schedule'],
+    patterns: [/(?:flexible|varying).*(?:working )?(?:hours|schedule)/], types: ['radio', 'select', 'checkbox', 'text']
+  },
+  {
+    key: 'willingnessToLearn', aliases: ['willing to learn', 'eager to learn', 'open to learning new technologies'],
+    patterns: [/(?:willing|eager|open).*(?:learn|new technolog)/], types: ['radio', 'select', 'checkbox', 'text', 'long_text']
+  },
+  {
+    key: 'salaryNegotiable', aliases: ['is salary negotiable', 'salary flexibility', 'flexible salary expectations'],
+    patterns: [/(?:salary|compensation).*(?:negotiable|flexib)/, /(?:negotiable|flexible).*(?:salary|compensation)/],
+    types: ['radio', 'select', 'checkbox', 'text']
+  },
+  {
     key: 'workAuthorization', aliases: ['work authorization', 'authorized to work', 'legally authorized to work'],
     patterns: [/(?:legally )?authori[sz]ed to work/, /work authori[sz]ation/]
   },

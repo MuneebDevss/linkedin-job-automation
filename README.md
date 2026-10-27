@@ -1,6 +1,6 @@
 # LinkedIn job automation
 
-The Firefox/Chrome extension captures one selected job post and sends it to a local NestJS backend. The backend normalizes destinations, classifies the application method, stores durable workflow state in SQLite, forwards email applications to the existing n8n webhook, and queues form applications for a later automation patch. It never submits a form automatically.
+The Firefox/Chrome extension captures one selected job post and sends it to a local NestJS backend. The backend normalizes destinations, classifies the application method, stores durable workflow state in SQLite, forwards email applications to the existing n8n webhook, and automatically processes eligible Google Forms with Playwright. Gmail automation is unchanged.
 
 ## 1. Start the backend and n8n
 Install Docker Engine and the Docker Compose plugin (if missing). In this extracted folder run:
@@ -30,24 +30,42 @@ Open LinkedIn and expand “see more”, then select the desired job-post text b
 
 Shortened `lnkd.in` URLs remain visible in the editable preview and are resolved by the backend only after you click Send. Resolution permits only HTTPS, validates DNS results and every redirect destination against private/network-local ranges, limits redirect depth, response size, and duration, and reads LinkedIn's marked external destination from its safety-interstitial page. Failure keeps the original URL.
 
-Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For form applications, it returns a durable form job ID with `pending` status. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch.
+Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For Google Forms, it creates a durable workflow record, opens an isolated browser context, fills reliable profile-engine answers, uploads the selected resume, validates each page, and submits only when the form is eligible. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch.
+
+Form processing can take longer than the email flow. Keep the popup open while Send is running when you want to see the result immediately. The durable status is also available through `GET /api/jobs/:applicationId`.
 
 ## Profile-based form answers
 
-The backend now exposes `POST /api/forms/answers` for answer generation only. It does not fill or submit forms. The engine matches common question variants, selects a resume from the existing catalog, and applies this strict order: verified profile → approved reusable answer → deterministic derivation → Gemini → unresolved.
+The backend exposes `POST /api/forms/answers` for answer generation without browser execution. The same engine is used by Google Forms automation. It matches common question variants, selects a resume from the existing catalog, and applies this strict order: verified profile → approved reusable answer → deterministic derivation → Gemini → unresolved.
 
 Review [the local profile](backend/data/profile.json) before use. Existing supplied values are retained; unknown phone, CGPA, employment, availability, relocation, experience, work authorization, and salary amounts intentionally remain `null`. Fill only values you have verified. Salary entries are separated by seniority, currency, and monthly/annual period.
 
 Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in the environment before starting Compose. Gemini suggestions are saved separately as unapproved suggestions and are never allowed to overwrite verified fields. The [API documentation](backend/API.md) contains the schema and [sample request](backend/examples/form-answers.input.json) and [sample output](backend/examples/form-answers.output.json).
 
-## 5. Test without LinkedIn first
-Paste the following into the extension text box, add any sample URL, ensure the backend and published n8n workflow are running, then send:
+Automatic submission requires both `FORM_AUTO_SUBMIT=true` and `verified.automationConsents.automaticSubmission=true`. Required legal declarations are never delegated to Gemini: add an exact normalized declaration label to `verified.automationConsents.legalDeclarations` only after you have explicitly chosen to accept it. CAPTCHA, authentication, inaccessible/closed forms, unsupported required controls, unresolved required facts, failed validation, and unconfirmed submissions stop with `needs_manual_action`.
 
-Hiring: Junior Node.js Developer
-Apply: hiring@example.com
-Application: https://docs.google.com/forms/d/e/example/viewform
+The verified profile also records positive preferences for onsite work, relocation, night/different shifts, flexible hours, willingness to learn, and negotiable salary. These deterministic answers take priority over Gemini. Salary amounts still remain tied to configured seniority, currency, and monthly/annual periods; flexibility only permits the nearest listed range when the exact amount is unavailable.
 
-Expected: `method` is `email_and_form`; the email workflow reports the n8n result, while the form workflow returns a durable ID with `pending` status. This URL is sample data, not a working form.
+## Persistent form authentication
+
+From a desktop session, run `cd backend && npm run auth:form`, then sign in inside the Playwright window. The application never accepts or stores your password. It stores only browser session cookies/origin state in a mode-`0600` file configured by `FORM_AUTH_STATE_PATH`, and each application loads that state into a fresh isolated context. Protect this file like a login session.
+
+The Compose setup bind-mounts the ignored `backend/data/playwright` directory into the backend container. Authenticate before starting Compose, or stop the backend container before refreshing the session, so the desktop CLI and container use the same state safely.
+
+If Google Workspace uses another identity provider, set `FORM_AUTH_LOGIN_URL` to its trusted HTTPS login entry point. An expired or rejected session produces `reauthentication_required`; rerun the command to refresh it. CAPTCHA and security challenges remain manual.
+
+## 5. Test safely without a real application
+
+Run the backend test suite. Its Playwright tests use a temporary loopback-only mock form and never contact or submit a real job application:
+
+```bash
+cd backend
+npm install
+npx playwright install chromium
+npm test
+```
+
+The mock suite covers two-page navigation, text, textarea, radio, checkbox, select, date, verified resume upload, persisted authenticated sessions, expired-session detection, preference-based answers, flexible salary ranges, confirmed automatic submission, CAPTCHA blocking, legal-consent blocking, and a Submit click without confirmation evidence.
 
 ## Manual extension test checklist
 
@@ -60,6 +78,8 @@ Expected: `method` is `email_and_form`; the email workflow reports the n8n resul
 - **No selection:** On a feed with multiple visible posts, clear the selection and open the popup; confirm it asks you to select one post. On an individual post page with one visible post, confirm it can capture without a selection.
 - **No links:** Select a plain-text post with no application links. Confirm the text and permalink are captured, Application links stays empty, and Send remains available.
 - **Manual send only:** Review/edit all fields and click Send. Confirm the extension sends exactly `text`, `url`, `links`, and `capturedAt` to the backend, and that opening the popup alone never sends anything.
+- **Google Form:** Use only a disposable test form. Confirm its workflow becomes `completed` only after the response-confirmation page is visible. Confirm the selected resume comes from the configured read-only resume directory.
+- **Blocked form:** On a disposable CAPTCHA/authentication fixture or a required unconfigured declaration, confirm the workflow becomes `needs_manual_action` and the form is not submitted.
 - **Browser coverage:** Run the checklist in Firefox first, then load the unpacked extension in Chrome/Chromium and repeat the selection, clickable-link, and Send cases.
 
 ## Limits and troubleshooting
@@ -67,8 +87,10 @@ Expected: `method` is `email_and_form`; the email workflow reports the n8n resul
 - Email workflow HTTP 404: publish the n8n workflow, or explicitly configure and arm its test URL.
 - LinkedIn markup changes: use manual text/link entry; no private endpoints or session cookies are used.
 - Form detection is rule-based. Unknown destinations use `needs_review`; image-only job ads need manual transcription.
-- Form jobs intentionally stay `pending`; [FormProcessor](backend/src/forms/form-processor.interface.ts) is a placeholder for later patches.
+- Only Google Forms have an automation adapter. Other form platforms remain durable `needs_manual_action` workflows until their own adapters are implemented.
+- Google file-upload forms reuse the saved authenticated session. Missing or expired sessions stop as `needs_manual_action` and identify whether initial authentication or reauthentication is needed.
+- Playwright screenshots for failures are written under the configured form-artifacts directory. They may contain application data, so keep that directory local and private.
 - An empty `API_TOKEN` is acceptable only while ports remain loopback-only. Configure a token and HTTPS before any broader exposure.
-- Browser installation and live Gmail/Google Sheets credentials must be verified locally. Automated backend tests do not validate third-party credentials.
+- Live Gmail/Google Sheets credentials are not exercised by the mock-form tests.
 
 Official references: https://docs.n8n.io/hosting/installation/docker/ and https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/

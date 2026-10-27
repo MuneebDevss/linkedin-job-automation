@@ -17,8 +17,24 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       GEMINI_TIMEOUT_MS: 30000
+      FORM_AUTOMATION_ENABLED: "true"
+      FORM_AUTO_SUBMIT: "true"
+      FORM_ALLOW_LOCALHOST: "false"
+      FORM_TIMEOUT_MS: 90000
+      FORM_NAVIGATION_TIMEOUT_MS: 30000
+      FORM_MAX_RETRIES: 1
+      FORM_MAX_PAGES: 10
+      FORM_ARTIFACTS_DIRECTORY: /app/data/form-artifacts
+      RESUME_DIRECTORY: /files/resumes
+      APPLICATION_DOCUMENTS_DIRECTORY: /files/resumes
+      FORM_AUTH_STATE_PATH: /app/data/playwright/google-storage-state.json
+      FORM_AUTH_LOGIN_URL: ${FORM_AUTH_LOGIN_URL:-https://accounts.google.com/}
+      FORM_AUTH_LOGIN_TIMEOUT_MS: 300000
+      PLAYWRIGHT_HEADLESS: "true"
     volumes:
       - backend_data:/app/data
+      - ./backend/data/playwright:/app/data/playwright:Z
+      - /home/muneeburrehman/Documents/Resumes:/files/resumes:ro,z
     depends_on:
       - n8n
     restart: unless-stopped

@@ -1,7 +1,8 @@
-import {Injectable, Logger, NotFoundException} from '@nestjs/common';
+import {Inject, Injectable, Logger, NotFoundException} from '@nestjs/common';
 import {ClassificationService} from '../classification/classification.service';
 import {DatabaseService, WorkflowRecord, WorkflowType} from '../database/database.service';
 import {IdentityService} from '../identity/identity.service';
+import {FORM_PROCESSOR, FormProcessor} from '../forms/form-processor.interface';
 import {N8nService} from '../n8n/n8n.service';
 import {UrlService} from '../url/url.service';
 import {ProcessJobDto} from './dto/process-job.dto';
@@ -23,7 +24,8 @@ export class JobsService {
     private readonly classifier: ClassificationService,
     private readonly identity: IdentityService,
     private readonly database: DatabaseService,
-    private readonly n8n: N8nService
+    private readonly n8n: N8nService,
+    @Inject(FORM_PROCESSOR) private readonly forms: FormProcessor
   ) {}
 
   async process(input: ProcessJobDto) {
@@ -59,8 +61,12 @@ export class JobsService {
       created.set('form', {id, created: this.database.insertWorkflow(id, identity.applicationId, 'form')});
     }
 
-    const email = created.has('email') ? await this.runEmail(created.get('email')!, payload) : null;
-    const form = created.has('form') ? this.formResult(created.get('form')!) : null;
+    const [email, form] = await Promise.all([
+      created.has('email') ? this.runEmail(created.get('email')!, payload) : Promise.resolve(null),
+      created.has('form')
+        ? this.runForm(created.get('form')!, identity.applicationId, classification.formUrls, payload.text)
+        : Promise.resolve(null)
+    ]);
     this.logger.log(`Processed ${identity.applicationId}: method=${classification.method}, new=${applicationCreated}.`);
 
     return {
@@ -95,8 +101,20 @@ export class JobsService {
     return this.recordResult(this.database.getWorkflow(run.id), false);
   }
 
-  private formResult(run: {id: string; created: boolean}): WorkflowResult {
-    return this.recordResult(this.database.getWorkflow(run.id), !run.created);
+  private async runForm(
+    run: {id: string; created: boolean}, applicationId: string, formUrls: string[], text: string
+  ): Promise<WorkflowResult> {
+    if (!run.created) return this.existingResult(run.id);
+    this.database.updateWorkflow(run.id, 'processing');
+    try {
+      const result = await this.forms.process({jobId: run.id, applicationId, formUrls, text});
+      this.database.updateWorkflow(run.id, result.status, result.details);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.database.updateWorkflow(run.id, 'failed', undefined, message);
+      this.logger.error(`Form workflow ${run.id} failed: ${message}`);
+    }
+    return this.recordResult(this.database.getWorkflow(run.id), false);
   }
 
   private existingResult(id: string): WorkflowResult {

@@ -133,7 +133,12 @@ export class AnswerEngineService {
       workAuthorization: profile.verified.workAuthorization,
       yearsOfExperience: profile.verified.yearsOfExperience,
       strengths: profile.verified.strengths,
-      relocation: profile.verified.relocation.willing,
+      relocation: profile.verified.willing_to_relocate ?? profile.verified.relocation.willing,
+      onsiteWork: profile.verified.willing_to_work_onsite,
+      shiftAvailability: profile.verified.willing_to_work_night_shifts,
+      flexibleHours: profile.verified.flexible_working_hours,
+      willingnessToLearn: profile.verified.willing_to_learn,
+      salaryNegotiable: profile.verified.salary_negotiable,
       availability: question.type === 'date'
         ? profile.verified.availability.date
         : profile.verified.availability.status || profile.verified.availability.date
@@ -193,7 +198,15 @@ export class AnswerEngineService {
     const raw: unknown = question.type === 'number' ? amount
       : question.type === 'radio' || question.type === 'select' ? amount
         : `${currency} ${amount} per ${period === 'annual' ? 'year' : 'month'}`;
-    const value = this.adapt(question, raw);
+    let value = this.adapt(question, raw);
+    if (value === null && profile.verified.salary_negotiable &&
+      (question.type === 'radio' || question.type === 'select') && question.options?.length) {
+      value = this.flexibleSalaryOption(question.options, amount);
+      if (value !== null) {
+        source = 'deterministic';
+        detail += ' Selected the nearest compatible range because salary is configured as negotiable.';
+      }
+    }
     return value === null ? null : {
       value, source, confidence: 'high', detail,
       profileField: `salaryExpectations.${seniority}.${currency}.${period}`
@@ -247,6 +260,14 @@ export class AnswerEngineService {
       return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
     }
     if (question.type === 'checkbox') {
+      if (typeof raw === 'boolean' && question.options?.length) {
+        if (raw) {
+          const positive = question.options.find(option => /^(?:yes|true|willing|available|agree|accept|flexible|negotiable|comfortable)\b/i.test(option.trim()));
+          return positive ? [positive] : question.options.length === 1 ? [question.options[0]] : null;
+        }
+        const negative = question.options.find(option => /^(?:no|false|not willing|unavailable|decline)\b/i.test(option.trim()));
+        return negative ? [negative] : null;
+      }
       const values = Array.isArray(raw) ? raw.map(String) : [String(raw)];
       if (!question.options?.length) return values;
       const selected = question.options.filter(option => values.some(value =>
@@ -256,7 +277,9 @@ export class AnswerEngineService {
     if (question.type === 'radio' || question.type === 'select') {
       if (!question.options?.length) return typeof raw === 'boolean' ? raw : String(raw);
       if (typeof raw === 'boolean') {
-        const expected = raw ? /^(?:yes|true|willing|available)\b/i : /^(?:no|false|not willing|unavailable)\b/i;
+        const expected = raw
+          ? /^(?:yes|true|willing|available|agree|accept|flexible|negotiable|comfortable)\b/i
+          : /^(?:no|false|not willing|unavailable|decline)\b/i;
         return question.options.find(option => expected.test(option.trim())) || null;
       }
       if (typeof raw === 'number') return this.salaryRangeOption(question.options, raw);
@@ -281,6 +304,25 @@ export class AnswerEngineService {
       if (numbers.length === 1 && /(?:below|less|under|up to)/i.test(option)) return amount <= numbers[0];
       return numbers.length === 1 && amount === numbers[0];
     }) || null;
+  }
+
+  private flexibleSalaryOption(options: string[], amount: number): string | null {
+    const negotiable = options.find(option => /\b(?:negotiable|flexible|open to discuss)\b/i.test(option));
+    if (negotiable) return negotiable;
+    const ranges = options.map(option => {
+      const numbers = [...option.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(k|m|lakh|lac)?/gi)].map(match => {
+        const value = Number(match[1].replace(/,/g, ''));
+        const factor = /^(?:lakh|lac)$/i.test(match[2] || '') ? 100000
+          : /^m$/i.test(match[2] || '') ? 1000000 : /^k$/i.test(match[2] || '') ? 1000 : 1;
+        return value * factor;
+      });
+      if (!numbers.length) return null;
+      const low = numbers[0];
+      const high = numbers[1] ?? numbers[0];
+      const distance = amount < low ? low - amount : amount > high ? amount - high : 0;
+      return {option, distance};
+    }).filter((item): item is {option: string; distance: number} => Boolean(item));
+    return ranges.sort((a, b) => a.distance - b.distance)[0]?.option || null;
   }
 
   private acceptGemini(

@@ -62,7 +62,9 @@ export class GeminiService {
     return [
       'Answer only the supplied unresolved job-application questions.',
       'Use only the verified profile, selected resume, and job description supplied in the JSON context.',
-      'Never invent identity, contact, education, salary, availability, work authorization, relocation, dates, or numeric experience.',
+      'Answer meaningful optional questions as well as required questions when the supplied context supports an accurate answer.',
+      'Treat verified work-condition preferences such as onsite work, shifts, relocation, flexible hours, learning, and salary negotiability as authoritative.',
+      'Never invent identity, contact, education, qualifications, certifications, employment history, experience, salary, availability, work authorization, relocation, or dates.',
       'Omit any question that cannot be answered reliably. Respect the question field type and listed options exactly.',
       'For each answer, choose one answer.kind and populate only its matching typed value property.',
       'Return JSON matching the schema. Evidence must name the provided context used. Mark reusable only for non-job-specific wording.'

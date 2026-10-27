@@ -20,7 +20,17 @@ export interface VerifiedProfile {
   yearsOfExperience: number | null;
   workAuthorization: string | null;
   strengths: string[];
+  willing_to_work_onsite?: boolean;
+  willing_to_relocate?: boolean;
+  willing_to_work_night_shifts?: boolean;
+  flexible_working_hours?: boolean;
+  willing_to_learn?: boolean;
+  salary_negotiable?: boolean;
   salaryExpectations: Record<Seniority, Record<string, SalaryBand>>;
+  automationConsents?: {
+    automaticSubmission: boolean;
+    legalDeclarations: Record<string, boolean>;
+  };
 }
 
 export interface ReusableAnswer {
@@ -51,6 +61,13 @@ export interface ResumeProfile {
   summary: string;
 }
 
+export interface ApplicationDocumentProfile {
+  id: string;
+  fileName: string;
+  path: string;
+  labels: string[];
+}
+
 export interface ProfileDocument {
   schemaVersion: 1;
   verified: VerifiedProfile;
@@ -58,4 +75,5 @@ export interface ProfileDocument {
   approvedReusableAnswers: ReusableAnswer[];
   generatedSuggestions: ReusableAnswer[];
   resumeCatalog: ResumeProfile[];
+  documentCatalog?: ApplicationDocumentProfile[];
 }

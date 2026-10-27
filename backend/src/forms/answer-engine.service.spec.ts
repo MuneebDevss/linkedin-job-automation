@@ -14,6 +14,8 @@ function profile(): ProfileDocument {
       location: 'Islamabad, Pakistan', university: 'Example University', cgpa: null,
       employmentStatus: null, availability: {status: null, date: '2026-11-15'},
       relocation: {willing: true, locations: []}, yearsOfExperience: 2, workAuthorization: null,
+      willing_to_work_onsite: true, willing_to_relocate: true, willing_to_work_night_shifts: true,
+      flexible_working_hours: true, willing_to_learn: true, salary_negotiable: true,
       strengths: ['Node.js', 'TypeScript'],
       salaryExpectations: {
         intern: {PKR: {monthly: null, annual: null}},
@@ -110,5 +112,34 @@ describe('AnswerEngineService', () => {
     expect(result.answers.map(answer => answer.value)).toEqual([
       2, '2026-11-15', 'Yes', 'Yes', ['Node.js'], 'Node.js, TypeScript'
     ]);
+  });
+
+  it('uses verified positive employment preferences without calling Gemini', async () => {
+    const result = await service.generate({
+      job: {title: 'Support Engineer', description: 'Onsite evening shift with learning opportunities'},
+      questions: [
+        {id: 'onsite', label: 'Are you comfortable working onsite?', type: 'radio', options: ['Yes', 'No']},
+        {id: 'shift', label: 'Are you willing to work night shifts?', type: 'select', options: ['Yes', 'No']},
+        {id: 'hours', label: 'Can you work flexible working hours?', type: 'checkbox', options: ['I am flexible']},
+        {id: 'learn', label: 'Are you willing to learn new technologies?', type: 'radio', options: ['Yes', 'No']},
+        {id: 'negotiable', label: 'Is compensation negotiable?', type: 'select', options: ['Negotiable', 'Fixed']}
+      ]
+    });
+    expect(result.answers.map(answer => answer.value)).toEqual([
+      'Yes', 'Yes', ['I am flexible'], 'Yes', 'Negotiable'
+    ]);
+    expect(result.answers.every(answer => answer.provenance.source === 'verified_profile')).toBe(true);
+    expect(gemini.answer).not.toHaveBeenCalled();
+  });
+
+  it('selects the nearest salary range only when salary flexibility is verified', async () => {
+    const result = await service.generate({
+      job: {title: 'Junior Developer', description: 'Entry role', seniority: 'entry', currency: 'PKR'},
+      questions: [{
+        id: 'salary', label: 'Expected monthly salary', type: 'select', salaryPeriod: 'monthly', currency: 'PKR',
+        options: ['PKR 40k - 60k per month', 'PKR 120k - 150k per month']
+      }]
+    });
+    expect(result.answers[0]).toMatchObject({value: 'PKR 120k - 150k per month', provenance: {source: 'deterministic'}});
   });
 });

@@ -6,7 +6,7 @@ export interface FormProcessingInput {
 }
 
 export interface FormProcessingResult {
-  status: 'completed' | 'failed';
+  status: 'completed' | 'needs_manual_action' | 'failed';
   details?: unknown;
 }
 

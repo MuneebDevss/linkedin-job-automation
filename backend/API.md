@@ -10,6 +10,15 @@ Copy `.env.example` to `.env` for direct local development. Important variables:
 - `N8N_WEBHOOK_URL`: existing n8n production or test webhook. The backend preserves its `{text, url, links, capturedAt}` contract.
 - `API_TOKEN`: optional for a loopback-only setup. When set, send the same value through the extension's Backend API token field. It is required as the `X-API-Key` header.
 - `URL_RESOLUTION_TIMEOUT_MS` and `N8N_TIMEOUT_MS`: positive timeout values in milliseconds.
+- `FORM_AUTOMATION_ENABLED` and `FORM_AUTO_SUBMIT`: both must be true before a form can be submitted.
+- `FORM_TIMEOUT_MS`, `FORM_NAVIGATION_TIMEOUT_MS`, `FORM_MAX_RETRIES`, and `FORM_MAX_PAGES`: bounded browser-operation limits.
+- `FORM_ARTIFACTS_DIRECTORY`: screenshots for failures or manual-action outcomes.
+- `RESUME_DIRECTORY`: the only directory from which the browser may upload a resume. Resume catalog file names are resolved inside this directory.
+- `APPLICATION_DOCUMENTS_DIRECTORY`: the only directory from which explicitly cataloged non-resume documents may be uploaded.
+- `FORM_AUTH_STATE_PATH`: permission-restricted Playwright cookie/storage state reused by isolated job contexts.
+- `FORM_AUTH_LOGIN_URL` and `FORM_AUTH_LOGIN_TIMEOUT_MS`: trusted HTTPS login entry point and time allowed for the one-time interactive sign-in.
+- `PLAYWRIGHT_HEADLESS`: keep enabled for normal backend operation. `PLAYWRIGHT_BROWSER_EXECUTABLE_PATH` can select an explicitly managed Chromium build.
+- `FORM_ALLOW_LOCALHOST`: exists for mock-form tests only and must remain false in normal operation.
 
 Never publish port 3000 or 5678 on a non-loopback interface without authentication and HTTPS.
 
@@ -26,7 +35,72 @@ Request:
 }
 ```
 
-The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. Email can be `completed` or `failed`; form remains `pending` until a future patch implements `FormProcessor`. A `duplicate` flag on each workflow indicates that branch was already recorded and was not run again.
+The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. The email and form branches run independently, so a failure in one does not stop the other. A `duplicate` flag on each workflow indicates that branch was already recorded and was not run again.
+
+For a supported Google Forms URL, the form workflow creates a fresh isolated Playwright browser context, inspects one page at a time, asks the profile engine for answers, selects the matching resume, validates the page, follows `Next`, and submits the final page. Its terminal statuses are:
+
+- `completed`: a Google Forms confirmation message or confirmation container was detected after submission;
+- `needs_manual_action`: automation stopped safely for CAPTCHA, authentication, a closed form, an unsupported or unresolved required field, missing legal consent, failed validation, or unconfirmed submission;
+- `failed`: browser infrastructure or navigation failed after bounded retries.
+
+The backend does not treat clicking Submit as success. A post-click response with no reliable confirmation becomes `needs_manual_action` and is not retried, avoiding an accidental duplicate submission.
+
+Google Forms support includes short/long text, numeric and date inputs, radio buttons, checkboxes, native and Google-style dropdowns, multi-page navigation, and file uploads. Other form platforms intentionally return `needs_manual_action` through the adapter registry until a dedicated adapter is added.
+
+CAPTCHAs are detected but never bypassed. Authentication-required forms reuse the saved browser session described below. Required legal declarations, fees, purchases, payment details, and financial commitments are not sent to Gemini and are accepted only when the normalized question text is explicitly set to `true` under `verified.automationConsents.legalDeclarations` in `data/profile.json`. Automatic submission also requires `verified.automationConsents.automaticSubmission: true`.
+
+Example legal consent configuration (use the normalized lower-case label shown by the form):
+
+```json
+{
+  "automationConsents": {
+    "automaticSubmission": true,
+    "legalDeclarations": {
+      "i certify that all information is accurate": true
+    }
+  }
+}
+```
+
+Screenshots are captured for actionable failures and stored under one job-specific folder. Browser/page errors, missing fields, validation failures, selected resume metadata, filled-field provenance, and submission evidence are stored in the form workflow's `response` object.
+
+### Persistent authentication
+
+Run this from a desktop session where Chromium can open a visible window:
+
+```bash
+cd backend
+npm run auth:form
+```
+
+Sign in through the website itself. The backend never asks for or receives a password. After a Google session cookie—or a completed configured SSO login—is detected, Playwright saves cookies and origin storage atomically with mode `0600` at `FORM_AUTH_STATE_PATH`. Treat this file as a secret and do not commit or share it.
+
+Compose bind-mounts `backend/data/playwright` at the same container path, so a session created by the desktop CLI is available to the container. Run the CLI before starting Compose, or stop the backend container while refreshing the session.
+
+Each job still receives a new isolated browser context; the saved storage state is copied into that context. If a protected form redirects back to login, the workflow returns `reauthentication_required` instead of repeatedly retrying. Run `npm run auth:form` again to refresh it.
+
+The same flow is exposed to authenticated local clients as:
+
+- `GET /api/forms/auth/status` — returns `missing`, `available`, `expired`, or `invalid`;
+- `POST /api/forms/auth/session` — opens the configured interactive login page and waits for sign-in;
+- `POST /api/forms/auth/google` — compatibility alias for the same operation.
+
+For Google Workspace SSO, set `FORM_AUTH_LOGIN_URL` to the trusted HTTPS login entry page. Cookies from the completed redirect chain are stored, allowing the form context to reuse both Google and identity-provider sessions.
+
+### Upload catalogs
+
+Resume-labeled fields use the existing role-matched `resumeCatalog`. Other upload fields never receive a resume by guesswork. To allow an existing cover letter, transcript, portfolio PDF, or similar document, add it to `documentCatalog`:
+
+```json
+{
+  "id": "transcript",
+  "fileName": "Muneeb_Transcript.pdf",
+  "path": "/files/resumes/Muneeb_Transcript.pdf",
+  "labels": ["transcript", "academic transcript"]
+}
+```
+
+The file must exist inside `APPLICATION_DOCUMENTS_DIRECTORY`. Before submission, the adapter verifies the selected filename is present in the file input or Google Forms upload UI and that no upload progress indicator remains.
 
 ## `GET /api/jobs/:applicationId`
 
@@ -34,7 +108,7 @@ Returns the stored classification and workflow statuses. URL-encode application 
 
 ## `POST /api/forms/answers`
 
-Generates answers only; it does not open a browser, fill a form, or submit an application. The request contains a job context and 1–100 questions. Supported `type` values are `text`, `number`, `date`, `radio`, `checkbox`, `select`, and `long_text`.
+Generates answers without invoking browser automation. The request contains a job context and 1–100 questions. Supported `type` values are `text`, `number`, `date`, `radio`, `checkbox`, `select`, and `long_text`.
 
 See [the sample request](examples/form-answers.input.json) and [sample response](examples/form-answers.output.json). The response always follows this priority:
 

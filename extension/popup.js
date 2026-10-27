@@ -115,7 +115,9 @@ $('send').onclick = async () => {
         links,
         capturedAt: new Date().toISOString()
       }),
-      signal: AbortSignal.timeout(20000)
+      // Form applications may inspect and fill several pages before the API
+      // can return a confirmed terminal status.
+      signal: AbortSignal.timeout(180000)
     });
     if (!response.ok) {
       const errorBody = await response.json().catch(() => null);

@@ -6,7 +6,7 @@ import {mkdirSync} from 'node:fs';
 import {AppConfiguration} from '../config/app.config';
 
 export type WorkflowType = 'email' | 'form';
-export type WorkflowStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type WorkflowStatus = 'pending' | 'processing' | 'completed' | 'needs_manual_action' | 'failed';
 
 export interface WorkflowRecord {
   id: string;
@@ -47,7 +47,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id TEXT PRIMARY KEY,
         application_id TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('email', 'form')),
-        status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'needs_manual_action', 'failed')),
         attempts INTEGER NOT NULL DEFAULT 0,
         response_json TEXT,
         error TEXT,
@@ -58,6 +58,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       CREATE INDEX IF NOT EXISTS workflow_runs_application_id_idx ON workflow_runs(application_id);
     `);
+    this.migrateWorkflowStatuses();
   }
 
   onModuleDestroy(): void {
@@ -110,6 +111,35 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   private prepare(sql: string): StatementSync {
     return this.db.prepare(sql);
+  }
+
+  private migrateWorkflowStatuses(): void {
+    const row = this.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_runs'").get() as
+      {sql?: string} | undefined;
+    if (!row?.sql || row.sql.includes('needs_manual_action')) return;
+    this.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN IMMEDIATE;
+      ALTER TABLE workflow_runs RENAME TO workflow_runs_legacy;
+      CREATE TABLE workflow_runs (
+        id TEXT PRIMARY KEY,
+        application_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('email', 'form')),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'needs_manual_action', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        response_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(application_id, type),
+        FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
+      );
+      INSERT INTO workflow_runs SELECT * FROM workflow_runs_legacy;
+      DROP TABLE workflow_runs_legacy;
+      CREATE INDEX workflow_runs_application_id_idx ON workflow_runs(application_id);
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
   }
 
   private mapWorkflow(row: Record<string, unknown>): WorkflowRecord {
