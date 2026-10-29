@@ -1,12 +1,32 @@
 const api = globalThis.browser || globalThis.chrome;
 const CAPTURE_MESSAGE_TYPE = 'JOB_POST_N8N_CAPTURE_0_2_2';
+/**
+ * **Summary:** Locates a popup control by its stable element identifier.
+ * **Inputs:** `id` is the popup element ID.
+ * **Returns:** The matching DOM element, or `null` when it is absent.
+ */
 const $ = id => document.getElementById(id);
+/**
+ * **Summary:** Displays capture, processing, or error feedback in the popup result area.
+ * **Inputs:** `message` is the user-facing status text to display.
+ * **Returns:** No value; the result area is updated.
+ */
 const show = message => { $('result').textContent = message; };
 
+/**
+ * **Summary:** Removes punctuation that may surround a URL copied from visible job-post text.
+ * **Inputs:** `value` is the raw URL-like text.
+ * **Returns:** The trimmed candidate URL.
+ */
 function trimUrl(value) {
   return value.trim().replace(/^[<(\[{"']+/, '').replace(/[>\])}"',;:.!?]+$/, '');
 }
 
+/**
+ * **Summary:** Converts a captured web or email link into a consistent URL for review and backend submission.
+ * **Inputs:** `value` is the raw captured link.
+ * **Returns:** The normalized URL, or `null` when invalid or unsupported.
+ */
 function normalizeUrl(value) {
   let candidate = trimUrl(value);
   if (!candidate) return null;
@@ -26,6 +46,11 @@ function normalizeUrl(value) {
   }
 }
 
+/**
+ * **Summary:** Normalizes and deduplicates the application links shown and submitted by the popup.
+ * **Inputs:** `values` contains raw links from capture or manual editing.
+ * **Returns:** The unique normalized links.
+ */
 function normalizeLinks(values) {
   const links = new Map();
   for (const value of values) {
@@ -37,6 +62,11 @@ function normalizeLinks(values) {
   return [...links.values()];
 }
 
+/**
+ * **Summary:** Identifies shortened LinkedIn destinations that the backend will resolve under its network-safety policy.
+ * **Inputs:** `value` is a normalized link.
+ * **Returns:** `true` when the link uses `lnkd.in`, otherwise `false`.
+ */
 function isShortLinkedInUrl(value) {
   try {
     return new URL(value).hostname.toLowerCase() === 'lnkd.in';
@@ -45,6 +75,11 @@ function isShortLinkedInUrl(value) {
   }
 }
 
+/**
+ * **Summary:** Retrieves the active regular web-page tab that can supply a job-post capture.
+ * **Inputs:** No parameters; the current browser window is queried.
+ * **Returns:** The active tab, or an actionable error when capture is unavailable there.
+ */
 async function activePageTab() {
   const [tab] = await api.tabs.query({active: true, currentWindow: true});
   if (!tab?.url || !/^https?:\/\//i.test(tab.url)) {
@@ -53,6 +88,11 @@ async function activePageTab() {
   return tab;
 }
 
+/**
+ * **Summary:** Requests a capture from the active tab and installs the current capture script once when an older tab lacks it.
+ * **Inputs:** `tab` is the active web-page tab to capture.
+ * **Returns:** The content script's capture response.
+ */
 async function requestCapture(tab) {
   try {
     const result = await api.tabs.sendMessage(tab.id, {type: CAPTURE_MESSAGE_TYPE});
@@ -65,6 +105,11 @@ async function requestCapture(tab) {
   }
 }
 
+/**
+ * **Summary:** Automatically captures the active job post when the popup opens and prepares the payload for user review.
+ * **Inputs:** No parameters; the active page and stored popup controls are used.
+ * **Returns:** A promise that resolves after the preview and status are updated.
+ */
 async function captureOnOpen() {
   $('send').disabled = true;
   try {

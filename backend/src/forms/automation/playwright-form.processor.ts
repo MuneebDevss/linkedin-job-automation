@@ -35,6 +35,11 @@ interface AutomationDetails {
 export class PlaywrightFormProcessor implements FormProcessor {
   private readonly logger = new Logger(PlaywrightFormProcessor.name);
 
+  /**
+   * **Summary:** Creates the form processor with the browser, platform, answer, profile, artifact, and authentication services required for safe application automation.
+   * **Inputs:** The injected services provide configuration, browser sessions, form adapters, answers, profile data, evidence capture, and authentication state.
+   * **Returns:** A processor instance ready to execute form-application workflows.
+   */
   constructor(
     private readonly config: ConfigService<AppConfiguration, true>,
     private readonly browser: PlaywrightBrowserService,
@@ -45,6 +50,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     private readonly authenticationStates: AuthenticationStateStoreService
   ) {}
 
+  /**
+   * **Summary:** Validates a form workflow, selects its platform adapter, and runs retry-safe automation without risking duplicate submissions.
+   * **Inputs:** `input` contains the job identity, post text, and discovered application-form URLs.
+   * **Returns:** The completed, failed, or manual-action result with a detailed automation audit trail.
+   */
   async process(input: FormProcessingInput): Promise<FormProcessingResult> {
     const details: AutomationDetails = {
       attempts: 0, pages: [], filled: [], issues: [], screenshots: [], browserErrors: [], attachments: [],
@@ -93,6 +103,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return {status: 'failed', details};
   }
 
+  /**
+   * **Summary:** Completes the supported pages of one form by generating trusted answers, attaching approved documents, validating fields, and submitting only with consent.
+   * **Inputs:** `input` supplies job context; `url`, `adapter`, and `page` identify the form; `details` accumulates the audit trail.
+   * **Returns:** The final form-processing result and recorded evidence.
+   */
   private async run(
     input: FormProcessingInput,
     url: string,
@@ -264,11 +279,21 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return this.manual(details, 'page_limit_exceeded', `The form exceeded the configured ${maxPages}-page limit.`);
   }
 
+  /**
+   * **Summary:** Records an issue that requires a person to finish or review the application.
+   * **Inputs:** `details` is the workflow audit trail; `code` and `message` describe the blocking condition.
+   * **Returns:** A manual-action processing result.
+   */
   private manual(details: AutomationDetails, code: string, message: string): FormProcessingResult {
     details.issues.push({code, message});
     return {status: 'needs_manual_action', details};
   }
 
+  /**
+   * **Summary:** Records a manual-action issue and captures the current form page to support human review.
+   * **Inputs:** `page` and `jobId` identify the evidence; `details`, `code`, and `message` describe the workflow and issue.
+   * **Returns:** A manual-action result containing the screenshot when capture succeeds.
+   */
   private async manualWithScreenshot(
     page: Page, jobId: string, details: AutomationDetails, code: string, message: string
   ): Promise<FormProcessingResult> {
@@ -278,6 +303,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return {status: 'needs_manual_action', details};
   }
 
+  /**
+   * **Summary:** Converts a field-population failure into a structured issue tied to the affected form question.
+   * **Inputs:** `question` identifies the field; `error` describes why it could not be populated.
+   * **Returns:** The structured form issue used for audit and manual review.
+   */
   private fillIssue(question: ExtractedFormQuestion, error: unknown): FormIssue {
     return {
       questionId: question.id, label: question.label, code: 'field_fill_failed', required: question.required,
@@ -285,6 +315,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     };
   }
 
+  /**
+   * **Summary:** Checks an answer against the field's declared length, pattern, and numeric boundaries before entering it.
+   * **Inputs:** `question` contains the constraints; `value` is the proposed answer.
+   * **Returns:** A constraint-mismatch issue, or `null` when the answer satisfies known limits.
+   */
   private constraintIssue(question: ExtractedFormQuestion, value: AnswerValue): FormIssue | null {
     const text = Array.isArray(value) ? value.join(', ') : String(value);
     const {minLength, maxLength, pattern, min, max} = question.constraints;
@@ -305,6 +340,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     } : null;
   }
 
+  /**
+   * **Summary:** Produces an affirmative value for a legal declaration that the profile has explicitly authorized.
+   * **Inputs:** `question` describes the declaration's control type and available choices.
+   * **Returns:** The compatible consent value to enter into the field.
+   */
   private consentValue(question: ExtractedFormQuestion): AnswerValue {
     if (question.controlKind === 'checkbox') return [question.options?.[0] || question.label];
     if (question.controlKind === 'radio' || question.controlKind === 'select') {
@@ -313,6 +353,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return 'I agree';
   }
 
+  /**
+   * **Summary:** Resolves an approved application document while ensuring it remains inside its configured document directory.
+   * **Inputs:** `fileName` identifies the catalogued document; `configuredDirectory` defines its trusted storage boundary.
+   * **Returns:** The verified absolute path of the accessible document.
+   */
   private async documentPath(fileName: string, configuredDirectory: string): Promise<string> {
     const directory = await realpath(configuredDirectory);
     const candidate = resolve(join(directory, basename(fileName)));
@@ -323,6 +368,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return resolved;
   }
 
+  /**
+   * **Summary:** Selects the resume or supporting document whose approved purpose matches an upload question.
+   * **Inputs:** `label` describes the upload request; `resume` is the job-matched resume; `profile` contains other approved documents.
+   * **Returns:** The selected document and its kind, or `null` when no safe match exists.
+   */
   private selectAttachment(
     label: string, resume: ResumeProfile | null, profile: ProfileDocument
   ): {kind: 'resume'; document: ResumeProfile} | {kind: 'application_document'; document: ApplicationDocumentProfile} | null {
@@ -335,6 +385,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return document ? {kind: 'application_document', document} : null;
   }
 
+  /**
+   * **Summary:** Retries transient field interactions while preserving the same approved answer and bounded attempt count.
+   * **Inputs:** `adapter` and `page` operate the form; `question` identifies the field; `value` is the answer to enter.
+   * **Returns:** A promise that resolves after the field is populated or rejects with the final failure.
+   */
   private async fillWithRetries(
     adapter: FormPlatformAdapter, page: Page, question: ExtractedFormQuestion, value: AnswerValue | string
   ): Promise<void> {
@@ -352,6 +407,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     throw lastError;
   }
 
+  /**
+   * **Summary:** Retries a document upload and requires positive attachment verification before treating the field as complete.
+   * **Inputs:** `adapter`, `page`, and `question` identify the upload control; `path` and `fileName` identify the approved document.
+   * **Returns:** A promise that resolves after verified attachment or rejects with the final failure.
+   */
   private async attachFileWithRetries(
     adapter: FormPlatformAdapter, page: Page, question: ExtractedFormQuestion, path: string, fileName: string
   ): Promise<void> {
@@ -373,6 +433,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     throw lastError;
   }
 
+  /**
+   * **Summary:** Converts an external form blocker into a manual-action result with authentication context and screenshot evidence.
+   * **Inputs:** `page` and `jobId` identify the form; `details` stores the audit; `code` and `message` classify the blocker.
+   * **Returns:** The manual-action result appropriate to the detected blocker.
+   */
   private async blockerResult(
     page: Page, jobId: string, details: AutomationDetails,
     code: 'captcha' | 'authentication_required' | 'form_closed' | 'access_denied', message: string
@@ -390,12 +455,22 @@ export class PlaywrightFormProcessor implements FormProcessor {
     return this.manualWithScreenshot(page, jobId, details, code, message);
   }
 
+  /**
+   * **Summary:** Determines whether a selected document satisfies the upload field's accepted extension or media type.
+   * **Inputs:** `fileName` identifies the document format; `accept` contains the form's allowed formats.
+   * **Returns:** `true` when the document is accepted, otherwise `false`.
+   */
   private fileAccepted(fileName: string, accept: string): boolean {
     const extension = `.${fileName.split('.').pop()?.toLowerCase() || ''}`;
     return accept.split(',').map(value => value.trim().toLowerCase()).some(value =>
       value === extension || (value === 'application/pdf' && extension === '.pdf') || value === '*/*');
   }
 
+  /**
+   * **Summary:** Adds browser and request failures to the workflow audit so incomplete automation can be diagnosed safely.
+   * **Inputs:** `page` is the active browser page; `details` receives relevant browser errors.
+   * **Returns:** No value; event reporting remains active for the page lifetime.
+   */
   private recordBrowserErrors(page: Page, details: AutomationDetails): void {
     page.on('pageerror', error => details.browserErrors.push(`page: ${error.message}`));
     page.on('requestfailed', request => {
@@ -406,6 +481,11 @@ export class PlaywrightFormProcessor implements FormProcessor {
     });
   }
 
+  /**
+   * **Summary:** Normalizes human-written document and question labels for reliable matching across formatting differences.
+   * **Inputs:** `value` is the label text to normalize.
+   * **Returns:** The normalized comparison text.
+   */
   private normalize(value: string): string {
     return value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   }

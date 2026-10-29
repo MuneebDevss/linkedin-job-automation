@@ -23,6 +23,11 @@ interface Candidate {
 export class AnswerEngineService {
   private readonly logger = new Logger(AnswerEngineService.name);
 
+  /**
+   * **Summary:** Creates the answer engine with the profile, matching, resume, and AI services needed to answer application forms.
+   * **Inputs:** `profiles`, `matcher`, `resumes`, and `gemini` provide trusted data, field recognition, resume choice, and fallback generation.
+   * **Returns:** An answer engine instance ready to generate application responses.
+   */
   constructor(
     private readonly profiles: ProfileStoreService,
     private readonly matcher: QuestionMatcherService,
@@ -30,6 +35,11 @@ export class AnswerEngineService {
     private readonly gemini: GeminiService
   ) {}
 
+  /**
+   * **Summary:** Produces the best available answer for every form question using verified data first, approved reuse next, deterministic derivation next, and AI only as a fallback.
+   * **Inputs:** `input` contains the target job context and the unique form questions to answer.
+   * **Returns:** The ordered answers, selected resume, detected conflicts, and the source-priority policy used.
+   */
   async generate(input: {job: JobAnswerContext; questions: FormQuestion[]}) {
     if (new Set(input.questions.map(question => question.id)).size !== input.questions.length) {
       throw new BadRequestException('Question IDs must be unique.');
@@ -116,6 +126,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Builds an answer candidate directly from trusted profile data when a matched field has a compatible value.
+   * **Inputs:** `profile` contains verified facts; `question` and `match` identify the requested field; `job` provides salary context.
+   * **Returns:** A verified candidate, or `null` when trusted data cannot answer the question safely.
+   */
   private verifiedCandidate(
     profile: ProfileDocument, question: FormQuestion, match: QuestionMatch, job: JobAnswerContext
   ): Candidate | null {
@@ -151,6 +166,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Derives a reliable answer from verified facts for fields that require predictable formatting or calculation.
+   * **Inputs:** `profile` supplies verified facts; `question` and `match` identify the requested field; `job` supplies job context.
+   * **Returns:** A deterministic candidate, or `null` when no safe derivation is available.
+   */
   private derivedCandidate(
     profile: ProfileDocument, question: FormQuestion, match: QuestionMatch, job: JobAnswerContext
   ): Candidate | null {
@@ -170,6 +190,11 @@ export class AnswerEngineService {
     return value === null ? null : {value, source: 'deterministic', confidence: 'high', detail};
   }
 
+  /**
+   * **Summary:** Selects a verified salary expectation for the job's seniority, currency, and pay period, with optional deterministic conversion.
+   * **Inputs:** `profile` contains salary bands; `question` and `job` provide context; `allowConversion` permits monthly-to-annual conversion or the reverse.
+   * **Returns:** A compatible salary candidate, or `null` when the required salary context or value is unavailable.
+   */
   private salaryCandidate(
     profile: ProfileDocument, question: FormQuestion, job: JobAnswerContext, allowConversion: boolean
   ): Candidate | null {
@@ -213,6 +238,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Finds the strongest approved reusable answer whose field and job-specific compatibility rules fit the current question.
+   * **Inputs:** `profile` holds approved answers; `question` and `match` describe the field; `job` supplies compatibility context.
+   * **Returns:** The reusable answer candidate, or `null` when none is suitable.
+   */
   private findSuggestion(
     profile: ProfileDocument, question: FormQuestion, match: QuestionMatch | null, job: JobAnswerContext
   ): Candidate | null {
@@ -235,6 +265,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Checks whether a reusable answer's role, seniority, currency, and salary-period restrictions fit the current job.
+   * **Inputs:** `item` contains compatibility rules; `job`, `seniority`, `currency`, and `period` describe the current application.
+   * **Returns:** `true` when the answer may be reused for this job, otherwise `false`.
+   */
   private compatible(
     item: ReusableAnswer, job: JobAnswerContext, seniority: Seniority | null,
     currency: string | undefined, period: SalaryPeriod | null
@@ -249,6 +284,11 @@ export class AnswerEngineService {
     return true;
   }
 
+  /**
+   * **Summary:** Converts a profile or generated value into the exact value shape accepted by a form field and its available options.
+   * **Inputs:** `question` defines the target field type and choices; `raw` is the proposed answer value.
+   * **Returns:** A compatible answer value, or `null` when the proposal cannot be represented safely.
+   */
   private adapt(question: FormQuestion, raw: unknown): AnswerValue | null {
     if (raw === null || raw === undefined || raw === '') return null;
     if (question.type === 'number') {
@@ -290,6 +330,11 @@ export class AnswerEngineService {
     return typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean' ? String(raw) : null;
   }
 
+  /**
+   * **Summary:** Matches a numeric salary expectation to the option whose stated range contains that amount.
+   * **Inputs:** `options` contains salary choices; `amount` is the expected salary in the question's currency and period.
+   * **Returns:** The matching option text, or `null` when no range fits.
+   */
   private salaryRangeOption(options: string[], amount: number): string | null {
     return options.find(option => {
       const numbers = [...option.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(k|m|lakh|lac)?/gi)].map(match => {
@@ -306,6 +351,11 @@ export class AnswerEngineService {
     }) || null;
   }
 
+  /**
+   * **Summary:** Chooses a negotiable salary choice or the closest available range when the candidate permits flexibility.
+   * **Inputs:** `options` contains the form's salary choices; `amount` is the candidate's preferred salary.
+   * **Returns:** The most flexible or nearest compatible option, or `null` when no option contains salary information.
+   */
   private flexibleSalaryOption(options: string[], amount: number): string | null {
     const negotiable = options.find(option => /\b(?:negotiable|flexible|open to discuss)\b/i.test(option));
     if (negotiable) return negotiable;
@@ -325,6 +375,11 @@ export class AnswerEngineService {
     return ranges.sort((a, b) => a.distance - b.distance)[0]?.option || null;
   }
 
+  /**
+   * **Summary:** Accepts an AI-proposed answer only when its value is compatible with the target field and available choices.
+   * **Inputs:** `question` defines the field; `match` supplies optional profile-field context; `answer` is Gemini's proposal.
+   * **Returns:** A normalized generated answer, or `null` when the proposal is unsafe or incompatible.
+   */
   private acceptGemini(
     question: FormQuestion, match: QuestionMatch | null, answer: GeminiAnswer
   ): GeneratedAnswer | null {
@@ -341,6 +396,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Verifies that an AI answer uses the basic value shape required by the form field type.
+   * **Inputs:** `question` identifies the field type; `value` is the AI-proposed answer.
+   * **Returns:** `true` when the value shape is compatible, otherwise `false`.
+   */
   private geminiTypeCompatible(question: FormQuestion, value: AnswerValue): boolean {
     if (question.type === 'number') return typeof value === 'number';
     if (question.type === 'checkbox') return Array.isArray(value);
@@ -350,6 +410,11 @@ export class AnswerEngineService {
     return typeof value === 'string';
   }
 
+  /**
+   * **Summary:** Converts a reusable AI answer into an unapproved profile suggestion scoped to the job context where it was generated.
+   * **Inputs:** `question` and `match` identify the field; `answer` contains the proposal; `job` supplies compatibility boundaries.
+   * **Returns:** A reusable-answer record awaiting explicit approval.
+   */
   private toSuggestion(
     question: FormQuestion, match: QuestionMatch | null, answer: GeminiAnswer, job: JobAnswerContext
   ): ReusableAnswer {
@@ -374,6 +439,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Converts an internal candidate into the public answer model while retaining its confidence and provenance.
+   * **Inputs:** `question` identifies the form field; `match` supplies optional field mapping; `candidate` contains the selected value and source.
+   * **Returns:** The generated answer returned to form automation or API callers.
+   */
   private toAnswer(question: FormQuestion, match: QuestionMatch | null, candidate: Candidate): GeneratedAnswer {
     return {
       questionId: question.id, question: question.label, fieldType: question.type,
@@ -387,6 +457,11 @@ export class AnswerEngineService {
     };
   }
 
+  /**
+   * **Summary:** Infers a standardized seniority level from human-written job text.
+   * **Inputs:** `value` is a job title or description that may contain seniority language.
+   * **Returns:** The recognized seniority, or `null` when the text is ambiguous.
+   */
   private detectSeniority(value: string): Seniority | null {
     if (/\bintern(?:ship)?\b/i.test(value)) return 'intern';
     if (/\b(?:junior|jr\.?|entry[ -]?level|graduate|associate)\b/i.test(value)) return 'entry';
@@ -396,10 +471,20 @@ export class AnswerEngineService {
     return null;
   }
 
+  /**
+   * **Summary:** Determines the job's seniority by preferring structured metadata and then inspecting its title and description.
+   * **Inputs:** `job` contains the available structured and human-written job details.
+   * **Returns:** The job's standardized seniority, or `null` when it cannot be determined.
+   */
   private jobSeniority(job: JobAnswerContext): Seniority | null {
     return job.seniority || this.detectSeniority(job.title || '') || this.detectSeniority(job.description);
   }
 
+  /**
+   * **Summary:** Recognizes the supported salary currency referenced in a question or job description.
+   * **Inputs:** `value` is text that may contain a currency code or symbol.
+   * **Returns:** The standardized currency code, or `undefined` when no supported currency is found.
+   */
   private detectCurrency(value: string): string | undefined {
     if (/\b(?:pkr|rs\.?)\b|₨/i.test(value)) return 'PKR';
     if (/\bUSD\b|\$/i.test(value)) return 'USD';
@@ -408,16 +493,31 @@ export class AnswerEngineService {
     return undefined;
   }
 
+  /**
+   * **Summary:** Determines whether salary text requests a monthly or annual amount while rejecting ambiguous wording.
+   * **Inputs:** `value` is salary-related question or job text.
+   * **Returns:** The recognized salary period, or `null` when missing or ambiguous.
+   */
   private detectSalaryPeriod(value: string): SalaryPeriod | null {
     const monthly = /\b(?:monthly|per month|month|\/mo)\b/i.test(value);
     const annual = /\b(?:annual|annually|per annum|per year|yearly|\/yr)\b/i.test(value);
     return monthly === annual ? null : monthly ? 'monthly' : 'annual';
   }
 
+  /**
+   * **Summary:** Combines a salary question and its choices into one searchable context for currency and period detection.
+   * **Inputs:** `question` contains the field label and optional choices.
+   * **Returns:** The combined salary-question text.
+   */
   private salaryQuestionText(question: FormQuestion): string {
     return `${question.label} ${(question.options || []).join(' ')}`;
   }
 
+  /**
+   * **Summary:** Compares answer values structurally so conflicts can be reported consistently across scalar and list fields.
+   * **Inputs:** `a` and `b` are answer values from different sources.
+   * **Returns:** `true` when the values are equivalent, otherwise `false`.
+   */
   private equalValues(a: AnswerValue, b: AnswerValue): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
   }

@@ -30,10 +30,20 @@
 
   let lastSelection = null;
 
+  /**
+   * **Summary:** Converts a selected DOM node into the element that can be inspected for its enclosing job post.
+   * **Inputs:** `node` is a selection boundary or other DOM node.
+   * **Returns:** The node itself when it is an element, its parent element otherwise, or no element when unavailable.
+   */
   function elementForNode(node) {
     return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
   }
 
+  /**
+   * **Summary:** Ranks LinkedIn post containers by how specifically they identify a real feed activity.
+   * **Inputs:** `element` is a candidate post container.
+   * **Returns:** A numeric specificity score used to choose the best container.
+   */
   function postRank(element) {
     if (element.matches('[data-urn^="urn:li:activity:"]')) return 50;
     if (element.matches('[data-id^="urn:li:activity:"], [data-activity-urn^="urn:li:activity:"]')) return 48;
@@ -44,6 +54,11 @@
     return 10;
   }
 
+  /**
+   * **Summary:** Finds the most specific LinkedIn post that encloses a selected page element.
+   * **Inputs:** `element` is an element within or near a job post.
+   * **Returns:** The best enclosing post container, or `null` when none is found.
+   */
   function findPostForElement(element) {
     const matches = [];
     for (let current = element; current && current !== document.documentElement; current = current.parentElement) {
@@ -52,6 +67,11 @@
     return matches.sort((a, b) => postRank(b) - postRank(a))[0] || null;
   }
 
+  /**
+   * **Summary:** Associates a text selection with its enclosing post, using text and selection scope when LinkedIn wrappers are ambiguous.
+   * **Inputs:** `range` is the browser selection range; `text` is its selected text.
+   * **Returns:** The associated post or scoped selection container, or `null` when association is unsafe.
+   */
   function findPostForRange(range, text) {
     // A visual selection often starts and ends in different nested LinkedIn
     // wrappers. Its common ancestor is still inside the one enclosing post.
@@ -61,6 +81,11 @@
     return findUniquePostContainingText(text) || findSelectionContainer(range, text);
   }
 
+  /**
+   * **Summary:** Finds a reasonably scoped container for selected job text when no recognized LinkedIn post wrapper is available.
+   * **Inputs:** `range` identifies the selection location; `text` is the selected content.
+   * **Returns:** The largest useful connected container, or `null` when none remains available.
+   */
   function findSelectionContainer(range, text) {
     const needle = text.replace(/\s+/g, ' ').trim();
     let current = elementForNode(range.commonAncestorContainer);
@@ -80,6 +105,11 @@
     return best?.isConnected ? best : null;
   }
 
+  /**
+   * **Summary:** Remembers the user's current text selection and its associated post so the popup can capture it after focus changes.
+   * **Inputs:** No parameters; the function reads the active document selection.
+   * **Returns:** No value; the latest usable selection is stored for later capture.
+   */
   function rememberSelection() {
     const selection = document.getSelection();
     const text = selection?.toString().trim();
@@ -97,6 +127,11 @@
   document.addEventListener('pointerup', rememberSelection, true);
   document.addEventListener('keyup', rememberSelection, true);
 
+  /**
+   * **Summary:** Returns the latest usable selection and repairs its post association when LinkedIn has replaced page wrappers.
+   * **Inputs:** No parameters; current and remembered document selections are considered.
+   * **Returns:** The remembered selection with its best current post association, or `null` when no text was selected.
+   */
   function currentOrRememberedSelection() {
     rememberSelection();
     if (!lastSelection?.text) return null;
@@ -109,6 +144,11 @@
     return {...lastSelection, post};
   }
 
+  /**
+   * **Summary:** Finds one unambiguous LinkedIn post whose visible content contains the selected text.
+   * **Inputs:** `text` is the remembered selection to locate.
+   * **Returns:** The most specific matching post, or `null` when zero or multiple posts match.
+   */
   function findUniquePostContainingText(text) {
     const needle = text.replace(/\s+/g, ' ').trim();
     if (!needle) return null;
@@ -128,6 +168,11 @@
       .sort((a, b) => postRank(b) - postRank(a))[0] || roots[0];
   }
 
+  /**
+   * **Summary:** Removes disconnected, duplicate, and redundant nested post containers from a candidate list.
+   * **Inputs:** `posts` contains candidate LinkedIn post elements.
+   * **Returns:** The unique connected post containers.
+   */
   function uniquePosts(posts) {
     return posts.filter((post, index) => {
       if (!post.isConnected || posts.indexOf(post) !== index) return false;
@@ -138,6 +183,11 @@
     });
   }
 
+  /**
+   * **Summary:** Lists substantial LinkedIn posts currently visible in the viewport for unambiguous capture without a selection.
+   * **Inputs:** No parameters; the active page DOM and viewport are inspected.
+   * **Returns:** The unique visible post containers containing meaningful text.
+   */
   function visiblePosts() {
     return uniquePosts([...document.querySelectorAll(POST_SELECTOR)])
       .filter(post => {
@@ -147,6 +197,11 @@
       .filter(post => post.querySelector(TEXT_SELECTOR) || (post.innerText || '').trim().length > 40);
   }
 
+  /**
+   * **Summary:** Retrieves the LinkedIn activity identity associated with a post container.
+   * **Inputs:** `post` is a candidate LinkedIn post element.
+   * **Returns:** The activity URN, or `null` when the page does not expose one.
+   */
   function activityUrn(post) {
     return post?.closest('[data-urn^="urn:li:activity:"]')?.getAttribute('data-urn') ||
       post?.closest('[data-id^="urn:li:activity:"]')?.getAttribute('data-id') ||
@@ -156,6 +211,11 @@
       post?.querySelector('[data-activity-urn^="urn:li:activity:"]')?.getAttribute('data-activity-urn') || null;
   }
 
+  /**
+   * **Summary:** Extracts the primary commentary text from a post while avoiding duplicate nested text wrappers.
+   * **Inputs:** `post` is the selected LinkedIn post container.
+   * **Returns:** The most complete visible post text, or an empty string when unavailable.
+   */
   function primaryPostText(post) {
     if (!post) return '';
     const nodes = [...post.querySelectorAll(TEXT_SELECTOR)]
@@ -165,10 +225,20 @@
       .sort((a, b) => b.length - a.length)[0] || '';
   }
 
+  /**
+   * **Summary:** Removes surrounding punctuation introduced when a URL is copied from visible post text.
+   * **Inputs:** `value` is the raw URL-like text.
+   * **Returns:** The trimmed candidate URL.
+   */
   function trimUrl(value) {
     return value.trim().replace(/^[<(\[{"']+/, '').replace(/[>\])}"',;:.!?]+$/, '');
   }
 
+  /**
+   * **Summary:** Converts a captured web or email link into a consistent URL suitable for backend processing.
+   * **Inputs:** `value` is the raw link found in the post or page.
+   * **Returns:** The normalized URL, or `null` when the value is unsupported or invalid.
+   */
   function normalizeUrl(value) {
     let candidate = trimUrl(value);
     if (!candidate) return null;
@@ -188,10 +258,20 @@
     }
   }
 
+  /**
+   * **Summary:** Finds URL-like text that is visibly embedded in a selected job post.
+   * **Inputs:** `text` is selected or extracted post content.
+   * **Returns:** The raw web links present in the text.
+   */
   function visibleTextUrls(text) {
     return text.match(/(?:https?:\/\/|www\.)[^\s<>"']+/gi) || [];
   }
 
+  /**
+   * **Summary:** Extracts the destination advertised by a LinkedIn redirect while leaving unrelated URLs unchanged.
+   * **Inputs:** `value` is a captured anchor URL.
+   * **Returns:** The embedded destination when present, otherwise the original value.
+   */
   function unwrapLinkedInRedirect(value) {
     try {
       const url = new URL(value);
@@ -203,6 +283,11 @@
     }
   }
 
+  /**
+   * **Summary:** Determines whether a captured anchor may lead to an application destination rather than LinkedIn navigation.
+   * **Inputs:** `url` is the normalized or unwrapped anchor destination.
+   * **Returns:** `true` for email, short, or external destinations, otherwise `false`.
+   */
   function isApplicationAnchor(url) {
     if (/^mailto:/i.test(url)) return true;
     try {
@@ -213,6 +298,11 @@
     }
   }
 
+  /**
+   * **Summary:** Collects and deduplicates application links from selected text, post text, and relevant post anchors.
+   * **Inputs:** `post` is the selected container; `selectedText` and `postText` are captured content; `permalink` identifies the post itself.
+   * **Returns:** The normalized application destinations excluding the post permalink.
+   */
   function extractLinks(post, selectedText, postText, permalink) {
     const raw = [...visibleTextUrls(`${selectedText}\n${postText}`)];
     for (const anchor of post?.querySelectorAll?.('a[href]') || []) {
@@ -233,6 +323,11 @@
     return [...byKey.values()];
   }
 
+  /**
+   * **Summary:** Determines the most stable permalink for the captured LinkedIn post.
+   * **Inputs:** `post` is the selected post container when available.
+   * **Returns:** The post permalink, an activity-based URL, or the normalized current page URL.
+   */
   function postPermalink(post) {
     if (!/(^|\.)linkedin\.com$/i.test(location.hostname)) return normalizeUrl(location.href);
     const fromAnchor = normalizeUrl(post?.querySelector?.(PERMALINK_SELECTOR)?.href || '');
@@ -246,6 +341,11 @@
     return urn ? `https://www.linkedin.com/feed/update/${urn}/` : normalizeUrl(location.href);
   }
 
+  /**
+   * **Summary:** Captures one unambiguous job post with its text, stable source URL, and discovered application links.
+   * **Inputs:** No parameters; the function uses the current or remembered page selection and visible posts.
+   * **Returns:** The captured post payload; ambiguous or unreadable pages cause an actionable error.
+   */
   function capturePost() {
     const remembered = currentOrRememberedSelection();
     let post = remembered?.post || null;

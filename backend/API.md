@@ -17,6 +17,7 @@ Copy `.env.example` to `.env` for direct local development. Important variables:
 - `APPLICATION_DOCUMENTS_DIRECTORY`: the only directory from which explicitly cataloged non-resume documents may be uploaded.
 - `FORM_AUTH_STATE_PATH`: permission-restricted Playwright cookie/storage state reused by isolated job contexts.
 - `FORM_AUTH_LOGIN_URL` and `FORM_AUTH_LOGIN_TIMEOUT_MS`: trusted HTTPS login entry point and time allowed for the one-time interactive sign-in.
+- `FORM_AUTH_CDP_URL`: optional, desktop-only, unauthenticated loopback HTTP origin for attaching to a separately launched Chrome instance with a dedicated profile. Do not configure or expose it in Docker.
 - `PLAYWRIGHT_HEADLESS`: keep enabled for normal backend operation. `PLAYWRIGHT_BROWSER_EXECUTABLE_PATH` can select an explicitly managed Chromium build.
 - `FORM_ALLOW_LOCALHOST`: exists for mock-form tests only and must remain false in normal operation.
 
@@ -35,7 +36,7 @@ Request:
 }
 ```
 
-The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. The email and form branches run independently, so a failure in one does not stop the other. A `duplicate` flag on each workflow indicates that branch was already recorded and was not run again.
+The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. The email and form branches run independently, so a failure in one does not stop the other. A `duplicate: true` flag means a previously completed outcome was reused. Retry-safe form outcomes in `failed` or `needs_manual_action` are run again and return `duplicate: false`; outcomes where submission already started are never retried automatically.
 
 For a supported Google Forms URL, the form workflow creates a fresh isolated Playwright browser context, inspects one page at a time, asks the profile engine for answers, selects the matching resume, validates the page, follows `Next`, and submits the final page. Its terminal statuses are:
 
@@ -66,23 +67,36 @@ Screenshots are captured for actionable failures and stored under one job-specif
 
 ### Persistent authentication
 
-Run this from a desktop session where Chromium can open a visible window:
+Google can reject a browser launched under Playwright control even when it uses the stable Chrome executable. For Google authentication, first launch normal Chrome from the `backend` directory with an application-only profile:
+
+```bash
+mkdir -p data/chrome-auth-profile
+google-chrome-stable \
+  --user-data-dir="$PWD/data/chrome-auth-profile" \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9222 \
+  https://accounts.google.com/
+```
+
+Complete login manually, then capture the resulting session from another terminal:
 
 ```bash
 cd backend
-npm run auth:form
+FORM_AUTH_CDP_URL=http://127.0.0.1:9222 npm run auth:form
 ```
 
-Sign in through the website itself. The backend never asks for or receives a password. After a Google session cookie—or a completed configured SSO login—is detected, Playwright saves cookies and origin storage atomically with mode `0600` at `FORM_AUTH_STATE_PATH`. Treat this file as a secret and do not commit or share it.
+Use `google-chrome` or `chromium` if that is the Fedora executable name. Never point `--user-data-dir` at an everyday Chrome profile. The backend never asks for or receives a password. After a current Google session cookie—or a completed configured SSO login—is detected, Playwright saves cookies and origin storage atomically with mode `0600` at `FORM_AUTH_STATE_PATH`. Treat the dedicated profile and state file as secrets and do not commit or share them. The dedicated profile is deliberately outside `data/playwright`, so Compose mounts only the compact storage-state directory rather than the complete Chrome profile.
 
-Compose bind-mounts `backend/data/playwright` at the same container path, so a session created by the desktop CLI is available to the container. Run the CLI before starting Compose, or stop the backend container while refreshing the session.
+`npm run auth:form` without `FORM_AUTH_CDP_URL` remains backward compatible and opens a Playwright-managed browser. Use it only where the identity provider accepts that browser. A Google `/signin/rejected` response is reported as a failed authentication and is never saved as valid state.
 
-Each job still receives a new isolated browser context; the saved storage state is copied into that context. If a protected form redirects back to login, the workflow returns `reauthentication_required` instead of repeatedly retrying. Run `npm run auth:form` again to refresh it.
+Compose bind-mounts `backend/data/playwright` at the same container path, so a session created by the desktop CLI is available to the container. Run the CLI before starting Compose, or stop the backend container while refreshing the session. Do not pass `FORM_AUTH_CDP_URL` into Compose; the CDP endpoint is deliberately loopback-only and used only during desktop capture.
+
+Each job still receives a new isolated browser context; the saved storage state is copied into that context. If a protected form redirects back to login, the workflow returns `reauthentication_required` instead of repeatedly retrying. Repeat the dedicated-profile capture to refresh it. Google may revoke a cookie before its local expiry time, which can only be detected when a protected form rejects it.
 
 The same flow is exposed to authenticated local clients as:
 
 - `GET /api/forms/auth/status` — returns `missing`, `available`, `expired`, or `invalid`;
-- `POST /api/forms/auth/session` — opens the configured interactive login page and waits for sign-in;
+- `POST /api/forms/auth/session` — starts the configured interactive flow (managed browser or external CDP attachment) and waits for sign-in;
 - `POST /api/forms/auth/google` — compatibility alias for the same operation.
 
 For Google Workspace SSO, set `FORM_AUTH_LOGIN_URL` to the trusted HTTPS login entry page. Cookies from the completed redirect chain are stored, allowing the form context to reuse both Google and identity-provider sessions.

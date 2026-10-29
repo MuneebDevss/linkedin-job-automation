@@ -119,6 +119,11 @@ const DEFINITIONS: FieldDefinition[] = [
 
 @Injectable()
 export class QuestionMatcherService {
+  /**
+   * **Summary:** Normalizes application-question wording so equivalent labels can be recognized despite formatting differences.
+   * **Inputs:** `text` is the human-written label to normalize.
+   * **Returns:** The normalized comparison text.
+   */
   normalize(text: string): string {
     return text.normalize('NFKC').toLowerCase()
       .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
@@ -129,6 +134,11 @@ export class QuestionMatcherService {
       .replace(/\s+/g, ' ').trim();
   }
 
+  /**
+   * **Summary:** Maps a form question to the most likely verified profile field using exact aliases, business patterns, and token similarity.
+   * **Inputs:** `question` contains the field label and answer type to classify.
+   * **Returns:** The best field match and confidence, or `null` when no reliable definition fits.
+   */
   match(question: FormQuestion): QuestionMatch | null {
     const normalizedQuestion = this.normalize(question.label);
     let best: QuestionMatch | null = null;

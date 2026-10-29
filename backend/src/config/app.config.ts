@@ -26,16 +26,27 @@ export interface AppConfiguration {
   formAuthStatePath: string;
   formAuthLoginUrl: string;
   formAuthLoginTimeoutMs: number;
+  formAuthCdpUrl: string;
   playwrightHeadless: boolean;
   playwrightBrowserExecutablePath: string;
 }
 
+/**
+ * **Summary:** Reads a required positive integer setting and rejects invalid configuration before the application starts.
+ * **Inputs:** `name` identifies the environment variable; `fallback` is used when no value is configured.
+ * **Returns:** The validated positive integer setting.
+ */
 function integer(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
   return value;
 }
 
+/**
+ * **Summary:** Reads and validates an internal HTTP service URL so integrations remain limited to approved local destinations.
+ * **Inputs:** `name` identifies the environment variable; `fallback` supplies its default URL.
+ * **Returns:** The normalized local HTTP URL.
+ */
 function localHttpUrl(name: string, fallback: string): string {
   const value = process.env[name] || fallback;
   const url = new URL(value);
@@ -45,6 +56,11 @@ function localHttpUrl(name: string, fallback: string): string {
   return url.href;
 }
 
+/**
+ * **Summary:** Converts a human-friendly environment setting into a strict boolean configuration value.
+ * **Inputs:** `name` identifies the environment variable; `fallback` is used when the setting is absent.
+ * **Returns:** The configured boolean value.
+ */
 function boolean(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -53,12 +69,22 @@ function boolean(name: string, fallback: boolean): boolean {
   throw new Error(`${name} must be true or false.`);
 }
 
+/**
+ * **Summary:** Reads a count-like setting that may be zero and rejects invalid configuration values.
+ * **Inputs:** `name` identifies the environment variable; `fallback` is used when no value is configured.
+ * **Returns:** The validated non-negative integer setting.
+ */
 function nonNegativeInteger(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
   if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
   return value;
 }
 
+/**
+ * **Summary:** Builds the trusted sign-in destination used for manual form authentication.
+ * **Inputs:** No parameters; the destination comes from the authentication environment setting.
+ * **Returns:** A normalized credential-free HTTPS authentication URL.
+ */
 function authenticationUrl(): string {
   const value = process.env.FORM_AUTH_LOGIN_URL || 'https://accounts.google.com/';
   const url = new URL(value);
@@ -68,6 +94,28 @@ function authenticationUrl(): string {
   return url.href;
 }
 
+/**
+ * **Summary:** Validates the optional connection address for a locally managed external authentication browser.
+ * **Inputs:** No parameters; the connection address comes from the browser-authentication environment setting.
+ * **Returns:** The approved loopback browser origin, or an empty string when external-browser authentication is disabled.
+ */
+function authenticationCdpUrl(): string {
+  const value = process.env.FORM_AUTH_CDP_URL || '';
+  if (!value) return '';
+  const url = new URL(value);
+  const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
+  if (url.protocol !== 'http:' || !loopbackHosts.has(url.hostname) || url.username || url.password ||
+      (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) {
+    throw new Error('FORM_AUTH_CDP_URL must be an unauthenticated loopback HTTP origin, for example http://127.0.0.1:9222.');
+  }
+  return url.origin;
+}
+
+/**
+ * **Summary:** Assembles and validates all runtime settings required by the backend and its automation workflows.
+ * **Inputs:** No parameters; values are read from environment variables with safe local defaults.
+ * **Returns:** The complete typed application configuration.
+ */
 export default (): AppConfiguration => {
   const host = process.env.HOST || '127.0.0.1';
   if (!['127.0.0.1', 'localhost', '0.0.0.0'].includes(host)) {
@@ -102,6 +150,7 @@ export default (): AppConfiguration => {
     formAuthStatePath: resolve(process.env.FORM_AUTH_STATE_PATH || './data/playwright/google-storage-state.json'),
     formAuthLoginUrl: authenticationUrl(),
     formAuthLoginTimeoutMs: integer('FORM_AUTH_LOGIN_TIMEOUT_MS', 300000),
+    formAuthCdpUrl: authenticationCdpUrl(),
     playwrightHeadless: boolean('PLAYWRIGHT_HEADLESS', true),
     playwrightBrowserExecutablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE_PATH || ''
   };

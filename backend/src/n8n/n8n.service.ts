@@ -7,8 +7,18 @@ import {ProcessJobDto} from '../jobs/dto/process-job.dto';
 export class N8nService {
   private readonly logger = new Logger(N8nService.name);
 
+  /**
+   * **Summary:** Creates the n8n integration with its configured local webhook and request timeout.
+   * **Inputs:** `config` provides the approved n8n endpoint and timeout.
+   * **Returns:** An integration service instance ready to forward email workflows.
+   */
   constructor(private readonly config: ConfigService<AppConfiguration, true>) {}
 
+  /**
+   * **Summary:** Sends a normalized job capture to the n8n email workflow and returns its response for durable recording.
+   * **Inputs:** `payload` contains the captured job text, source, links, and timestamp.
+   * **Returns:** The JSON or text response produced by the n8n workflow.
+   */
   async forward(payload: ProcessJobDto): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.get('n8nTimeoutMs', {infer: true}));

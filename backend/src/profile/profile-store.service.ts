@@ -11,8 +11,18 @@ export class ProfileStoreService implements OnModuleInit {
   private readonly logger = new Logger(ProfileStoreService.name);
   private writeQueue: Promise<unknown> = Promise.resolve();
 
+  /**
+   * **Summary:** Creates the profile store with access to configured profile and template locations.
+   * **Inputs:** `config` provides the active profile path and initialization template.
+   * **Returns:** A profile-store instance ready for module initialization.
+   */
   constructor(private readonly config: ConfigService<AppConfiguration, true>) {}
 
+  /**
+   * **Summary:** Ensures a valid profile exists at startup, initializing it from the approved template when necessary.
+   * **Inputs:** No parameters; configured profile locations are used.
+   * **Returns:** A promise that resolves after a valid profile is available.
+   */
   async onModuleInit(): Promise<void> {
     const target = this.config.get('profilePath', {infer: true});
     try {
@@ -28,11 +38,21 @@ export class ProfileStoreService implements OnModuleInit {
     await this.load();
   }
 
+  /**
+   * **Summary:** Loads and validates the profile facts, answer suggestions, resumes, and application-document catalog.
+   * **Inputs:** No parameters; the configured profile file is read.
+   * **Returns:** The validated profile document.
+   */
   async load(): Promise<ProfileDocument> {
     const raw = await readFile(this.config.get('profilePath', {infer: true}), 'utf8');
     return this.validate(JSON.parse(raw));
   }
 
+  /**
+   * **Summary:** Adds new AI-generated reusable-answer suggestions without duplicating approved or previously generated records.
+   * **Inputs:** `suggestions` contains unapproved reusable answers produced from form questions.
+   * **Returns:** A promise that resolves after unique suggestions are durably stored.
+   */
   async addGeneratedSuggestions(suggestions: ReusableAnswer[]): Promise<void> {
     if (!suggestions.length) return;
     await this.enqueue(async () => {
@@ -49,12 +69,22 @@ export class ProfileStoreService implements OnModuleInit {
     });
   }
 
+  /**
+   * **Summary:** Serializes profile updates so concurrent automation jobs cannot overwrite each other's suggestions.
+   * **Inputs:** `task` is the profile update to run after earlier writes finish.
+   * **Returns:** A promise that resolves when this queued update completes.
+   */
   private async enqueue(task: () => Promise<void>): Promise<void> {
     const next = this.writeQueue.then(task, task);
     this.writeQueue = next.catch(() => undefined);
     await next;
   }
 
+  /**
+   * **Summary:** Ensures profile data has the supported schema and required collections before business logic consumes it.
+   * **Inputs:** `value` is the untrusted parsed profile content.
+   * **Returns:** The validated profile document; invalid content causes an error.
+   */
   private validate(value: unknown): ProfileDocument {
     const profile = value as Partial<ProfileDocument>;
     if (!profile || profile.schemaVersion !== 1 || !profile.verified ||
@@ -65,6 +95,11 @@ export class ProfileStoreService implements OnModuleInit {
     return profile as ProfileDocument;
   }
 
+  /**
+   * **Summary:** Replaces a profile file safely so readers never observe a partially written document.
+   * **Inputs:** `path` is the target profile file; `content` is the complete validated document text.
+   * **Returns:** A promise that resolves after the replacement is durable.
+   */
   private async writeAtomic(path: string, content: string): Promise<void> {
     await mkdir(dirname(path), {recursive: true});
     const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;

@@ -48,11 +48,35 @@ The verified profile also records positive preferences for onsite work, relocati
 
 ## Persistent form authentication
 
-From a desktop session, run `cd backend && npm run auth:form`, then sign in inside the Playwright window. The application never accepts or stores your password. It stores only browser session cookies/origin state in a mode-`0600` file configured by `FORM_AUTH_STATE_PATH`, and each application loads that state into a fresh isolated context. Protect this file like a login session.
+Google may reject sign-in when Chrome is launched by Playwright, even if `PLAYWRIGHT_BROWSER_EXECUTABLE_PATH` points to the stable Google Chrome binary. The recommended Fedora flow is therefore to complete login in a separately launched normal Chrome instance that uses a dedicated profile, then let the CLI capture that session over a loopback-only Chrome DevTools Protocol connection.
+
+In the first terminal, from `backend`, launch Chrome with a profile used only by this application:
+
+```bash
+mkdir -p data/chrome-auth-profile
+google-chrome-stable \
+  --user-data-dir="$PWD/data/chrome-auth-profile" \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9222 \
+  https://accounts.google.com/
+```
+
+On Fedora systems that install a different command, replace `google-chrome-stable` with `google-chrome` or `chromium`. Sign in manually and complete any legitimate Google security challenge. Do not use your everyday Chrome data directory.
+
+After the account is visibly signed in, run this from a second terminal:
+
+```bash
+cd backend
+FORM_AUTH_CDP_URL=http://127.0.0.1:9222 npm run auth:form
+```
+
+The application never accepts or stores your password. It attaches only to that dedicated browser, verifies a current Google session cookie, and stores browser session cookies/origin state in the mode-`0600` file configured by `FORM_AUTH_STATE_PATH`. Close the dedicated Chrome window afterward and protect both its profile directory and the state file like login sessions. Keeping the profile outside `data/playwright` also prevents the Compose bind mount from copying the full profile into the backend container. The normal form processor continues loading only the compact saved state into a fresh isolated context for every application.
+
+The original `npm run auth:form` flow remains available for identity providers that permit a Playwright-launched interactive browser. If Google displays “Couldn’t sign you in,” the command now fails explicitly instead of incorrectly treating incidental Google cookies as a successful login.
 
 The Compose setup bind-mounts the ignored `backend/data/playwright` directory into the backend container. Authenticate before starting Compose, or stop the backend container before refreshing the session, so the desktop CLI and container use the same state safely.
 
-If Google Workspace uses another identity provider, set `FORM_AUTH_LOGIN_URL` to its trusted HTTPS login entry point. An expired or rejected session produces `reauthentication_required`; rerun the command to refresh it. CAPTCHA and security challenges remain manual.
+Do not set `FORM_AUTH_CDP_URL` in Compose: its loopback address belongs to the desktop session and the Docker backend only needs the saved state file. If Google Workspace uses another identity provider, set `FORM_AUTH_LOGIN_URL` to its trusted HTTPS login entry point. An expired or rejected session produces `reauthentication_required`; repeat the dedicated-profile capture command to refresh it. CAPTCHA and security challenges remain manual and are never bypassed.
 
 ## 5. Test safely without a real application
 
@@ -89,6 +113,8 @@ The mock suite covers two-page navigation, text, textarea, radio, checkbox, sele
 - Form detection is rule-based. Unknown destinations use `needs_review`; image-only job ads need manual transcription.
 - Only Google Forms have an automation adapter. Other form platforms remain durable `needs_manual_action` workflows until their own adapters are implemented.
 - Google file-upload forms reuse the saved authenticated session. Missing or expired sessions stop as `needs_manual_action` and identify whether initial authentication or reauthentication is needed.
+- Google can revoke an otherwise unexpired browser session. In that case the workflow returns `reauthentication_required`; no local cookie-expiry check can predict server-side revocation.
+- CDP capture requires a desktop Chrome/Chromium instance on the same machine as the authentication CLI. It is intentionally restricted to loopback and is not a remote or container authentication mechanism.
 - Playwright screenshots for failures are written under the configured form-artifacts directory. They may contain application data, so keep that directory local and private.
 - An empty `API_TOKEN` is acceptable only while ports remain loopback-only. Configure a token and HTTPS before any broader exposure.
 - Live Gmail/Google Sheets credentials are not exercised by the mock-form tests.

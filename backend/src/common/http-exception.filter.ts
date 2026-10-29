@@ -5,6 +5,11 @@ import {FastifyReply, FastifyRequest} from 'fastify';
 export class StructuredExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(StructuredExceptionFilter.name);
 
+  /**
+   * **Summary:** Converts application failures into a consistent API error response while keeping internal failure details out of client messages.
+   * **Inputs:** `exception` is the failure being handled; `host` provides the active HTTP request and response.
+   * **Returns:** No value; the function sends the structured error response to the caller.
+   */
   catch(exception: unknown, host: ArgumentsHost): void {
     const request = host.switchToHttp().getRequest<FastifyRequest>();
     const response = host.switchToHttp().getResponse<FastifyReply>();

@@ -7,6 +7,11 @@ import {AppModule} from './app.module';
 import {StructuredExceptionFilter} from './common/http-exception.filter';
 import {AppConfiguration} from './config/app.config';
 
+/**
+ * **Summary:** Starts the backend with validated requests, structured errors, extension-safe CORS, and configured network binding.
+ * **Inputs:** No parameters; startup uses the application module and runtime configuration.
+ * **Returns:** A promise that resolves once the HTTP server is listening.
+ */
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,

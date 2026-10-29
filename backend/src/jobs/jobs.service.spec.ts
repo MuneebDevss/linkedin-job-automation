@@ -78,9 +78,49 @@ describe('JobsService', () => {
   });
 
   it('records manual action without blocking the email branch', async () => {
-    forms.process.mockResolvedValueOnce({status: 'needs_manual_action', details: {reason: 'captcha'}});
+    forms.process.mockResolvedValueOnce({
+      status: 'needs_manual_action', details: {reason: 'captcha', submission: {attempted: false}}
+    });
     const result = await service.process({...base, links: ['https://forms.gle/example']});
     expect(result.workflows.email).toMatchObject({status: 'completed'});
     expect(result.workflows.form).toMatchObject({status: 'needs_manual_action'});
+    expect(result).toMatchObject({duplicate: false});
+  });
+
+  it('retries a manual-action form and marks only the later completed reuse as duplicate', async () => {
+    forms.process
+      .mockResolvedValueOnce({
+        status: 'needs_manual_action',
+        details: {issues: [{code: 'authentication_required'}], submission: {attempted: false}}
+      })
+      .mockResolvedValueOnce({status: 'completed', details: {evidence: 'mock confirmation'}});
+    const input = {...base, links: ['https://forms.gle/example']};
+
+    const manual = await service.process(input);
+    const retried = await service.process(input);
+    const completedDuplicate = await service.process(input);
+
+    expect(manual).toMatchObject({duplicate: false, workflows: {form: {status: 'needs_manual_action', duplicate: false}}});
+    expect(retried).toMatchObject({duplicate: false, workflows: {form: {status: 'completed', duplicate: false}}});
+    expect(completedDuplicate).toMatchObject({duplicate: true, workflows: {form: {status: 'completed', duplicate: true}}});
+    expect(forms.process).toHaveBeenCalledTimes(2);
+    expect(database.getWorkflow(retried.workflows.form!.id).attempts).toBe(2);
+  });
+
+  it('does not retry a manual outcome after submission started', async () => {
+    forms.process.mockResolvedValueOnce({
+      status: 'needs_manual_action',
+      details: {issues: [{code: 'submission_unconfirmed'}], submission: {attempted: true}}
+    });
+    const input = {...base, links: ['https://forms.gle/example']};
+
+    await service.process(input);
+    const repeated = await service.process(input);
+
+    expect(repeated).toMatchObject({
+      duplicate: false,
+      workflows: {form: {status: 'needs_manual_action', duplicate: false}}
+    });
+    expect(forms.process).toHaveBeenCalledTimes(1);
   });
 });

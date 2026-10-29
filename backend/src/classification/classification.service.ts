@@ -13,6 +13,11 @@ const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform
 
 @Injectable()
 export class ClassificationService {
+  /**
+   * **Summary:** Classifies a job post by the application channels it offers and collects the usable email and form destinations.
+   * **Inputs:** `text` is the job-post content; `links` contains URLs discovered in that post.
+   * **Returns:** The selected application method together with unique email addresses and form URLs.
+   */
   classify(text: string, links: string[]): Classification {
     const deobfuscated = text.normalize('NFKC')
       .replace(/\s*[\[(<{]\s*at\s*[\])>}]\s*/gi, '@')

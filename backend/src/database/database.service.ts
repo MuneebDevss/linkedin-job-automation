@@ -24,8 +24,18 @@ export interface WorkflowRecord {
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private db!: DatabaseSync;
 
+  /**
+   * **Summary:** Creates the database service with access to the configured storage location.
+   * **Inputs:** `config` provides the path for persistent or in-memory application storage.
+   * **Returns:** A database service instance that will initialize with the application module.
+   */
   constructor(private readonly config: ConfigService<AppConfiguration, true>) {}
 
+  /**
+   * **Summary:** Opens application storage, creates the required job tables, and upgrades older workflow records when needed.
+   * **Inputs:** No parameters; initialization uses the configured database path.
+   * **Returns:** No value; the service becomes ready for application and workflow operations.
+   */
   onModuleInit(): void {
     const path = this.config.get('databasePath', {infer: true});
     if (path !== ':memory:') mkdirSync(dirname(path), {recursive: true});
@@ -61,10 +71,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.migrateWorkflowStatuses();
   }
 
+  /**
+   * **Summary:** Closes application storage when the module shuts down so pending database resources are released safely.
+   * **Inputs:** No parameters.
+   * **Returns:** No value.
+   */
   onModuleDestroy(): void {
     this.db?.close();
   }
 
+  /**
+   * **Summary:** Records a newly discovered job application once so repeated captures do not create duplicate work.
+   * **Inputs:** `input` contains the stable identity, source details, classification, payload, and application destinations.
+   * **Returns:** `true` when a new application was stored, or `false` when it already existed.
+   */
   insertApplication(input: {
     id: string; sourceUrl: string | null; contentHash: string; method: string;
     payload: unknown; emails: string[]; forms: string[];
@@ -79,6 +99,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return Number(result.changes) === 1;
   }
 
+  /**
+   * **Summary:** Creates one pending delivery workflow for an application while preserving idempotency for each channel.
+   * **Inputs:** `id` identifies the workflow; `applicationId` links its application; `type` selects email or form delivery.
+   * **Returns:** `true` when the workflow was created, or `false` when an equivalent workflow already existed.
+   */
   insertWorkflow(id: string, applicationId: string, type: WorkflowType): boolean {
     const now = new Date().toISOString();
     const result = this.prepare(`
@@ -89,6 +114,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return Number(result.changes) === 1;
   }
 
+  /**
+   * **Summary:** Atomically reclaims a safely retryable workflow so concurrent duplicate requests cannot execute it twice.
+   * **Inputs:** `id` identifies the workflow; `expectedStatus` is the retryable terminal state observed by the caller.
+   * **Returns:** `true` when this caller claimed the retry, or `false` when another caller changed the workflow first.
+   */
+  claimWorkflowRetry(id: string, expectedStatus: 'failed' | 'needs_manual_action'): boolean {
+    const result = this.prepare(`
+      UPDATE workflow_runs
+      SET status = 'processing', attempts = attempts + 1, response_json = NULL, error = NULL, updated_at = ?
+      WHERE id = ? AND status = ?
+    `).run(new Date().toISOString(), id, expectedStatus);
+    return Number(result.changes) === 1;
+  }
+
+  /**
+   * **Summary:** Advances a workflow's lifecycle and records its latest outcome for status reporting and retries.
+   * **Inputs:** `id` identifies the workflow; `status` is its new state; `response` and `error` describe the outcome when available.
+   * **Returns:** No value; the matching workflow record is updated.
+   */
   updateWorkflow(id: string, status: WorkflowStatus, response?: unknown, error?: string): void {
     this.prepare(`
       UPDATE workflow_runs SET status = ?, attempts = attempts + ?, response_json = ?, error = ?, updated_at = ?
@@ -97,11 +141,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       error || null, new Date().toISOString(), id);
   }
 
+  /**
+   * **Summary:** Retrieves the current state and recorded outcome of a workflow.
+   * **Inputs:** `id` identifies the workflow to retrieve.
+   * **Returns:** The normalized workflow record.
+   */
   getWorkflow(id: string): WorkflowRecord {
     const row = this.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id) as Record<string, unknown>;
     return this.mapWorkflow(row);
   }
 
+  /**
+   * **Summary:** Retrieves an application summary together with every workflow created for its application channels.
+   * **Inputs:** `id` identifies the application to retrieve.
+   * **Returns:** The application and its workflows, or `null` when the application is unknown.
+   */
   getApplication(id: string): {id: string; method: string; workflows: WorkflowRecord[]} | null {
     const application = this.prepare('SELECT id, method FROM applications WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     if (!application) return null;
@@ -109,10 +163,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return {id: String(application.id), method: String(application.method), workflows: rows.map(row => this.mapWorkflow(row))};
   }
 
+  /**
+   * **Summary:** Creates a reusable database operation for an application-storage query.
+   * **Inputs:** `sql` is the database statement to prepare.
+   * **Returns:** The prepared statement used by the service's storage operations.
+   */
   private prepare(sql: string): StatementSync {
     return this.db.prepare(sql);
   }
 
+  /**
+   * **Summary:** Upgrades legacy workflow storage to support manual-action outcomes without losing existing records.
+   * **Inputs:** No parameters; the function examines the current workflow table definition.
+   * **Returns:** No value; storage is migrated only when the newer status is missing.
+   */
   private migrateWorkflowStatuses(): void {
     const row = this.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_runs'").get() as
       {sql?: string} | undefined;
@@ -142,6 +206,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     `);
   }
 
+  /**
+   * **Summary:** Converts a stored workflow row into the typed model returned to application services and API callers.
+   * **Inputs:** `row` is the raw workflow data read from application storage.
+   * **Returns:** A normalized workflow record with parsed response and timestamp fields.
+   */
   private mapWorkflow(row: Record<string, unknown>): WorkflowRecord {
     return {
       id: String(row.id),

@@ -53,8 +53,23 @@ const lines = normalizedText
   .map(line => line.replace(/[ \t]+/g, ' ').trim())
   .filter(Boolean);
 
+/**
+ * **Summary:** Removes decorative leading characters so a post line can be classified by its meaningful text.
+ * **Inputs:** `s` is a normalized job-post line.
+ * **Returns:** The line beginning at its first meaningful letter, number, or role punctuation.
+ */
 const stripLead = s => s.replace(/^[^\p{L}\p{N}.#+]+/u, '').trim();
+/**
+ * **Summary:** Identifies lines made entirely of hashtags so they do not influence role or company extraction.
+ * **Inputs:** `s` is a normalized job-post line.
+ * **Returns:** `true` when the line contains only hashtags, otherwise `false`.
+ */
 const isHashtagOnly = s => /^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(s);
+/**
+ * **Summary:** Identifies bullet-point lines that usually describe requirements rather than the primary job title.
+ * **Inputs:** `s` is a normalized job-post line.
+ * **Returns:** `true` when the line starts with a recognized bullet marker, otherwise `false`.
+ */
 const isBullet = s => /^[-•*·▪●◦‣✔✅☑➤➢►]/u.test(s);
 
 // -------------------- Emails and links --------------------
@@ -100,6 +115,11 @@ const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform
 const formCandidates = links.filter(link => FORM_RE.test(link));
 
 // Pick ONE recipient when the post lists several emails.
+/**
+ * **Summary:** Selects one application recipient using an explicit override, application wording, and HR-style address signals without guessing through ambiguity.
+ * **Inputs:** No parameters; captured request data, extracted emails, and post lines are evaluated.
+ * **Returns:** The chosen email and selection reason, or a null email when no unique recipient is reliable.
+ */
 function chooseApplicationEmail() {
   if (typeof b.applyEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.applyEmail.trim())) {
     return { email: b.applyEmail.trim().toLowerCase(), reason: 'provided' };
@@ -153,6 +173,11 @@ const REJECT = new Set([
   'can', 'may', 'work', 'works', 'working', 'mentoring', 'mentor'
 ]);
 
+/**
+ * **Summary:** Reduces a role-phrase token to plain lowercase wording for stop-word and rejection checks.
+ * **Inputs:** `w` is a token from a candidate role phrase.
+ * **Returns:** The token without surrounding non-letter punctuation.
+ */
 const bare = w =>
   w.toLowerCase().replace(/’/g, "'").replace(/^[^a-z']+|[^a-z']+$/g, '');
 
@@ -174,6 +199,11 @@ const ACRONYMS = {
   javascript: 'JavaScript', typescript: 'TypeScript', n8n: 'n8n'
 };
 
+/**
+ * **Summary:** Applies readable title casing to all-uppercase or all-lowercase role text while preserving established technology names.
+ * **Inputs:** `s` is a cleaned role title.
+ * **Returns:** The human-readable title with recognized acronyms and product casing.
+ */
 function titleCaseIfNeeded(s) {
   const letters = s.replace(/[^\p{L}]/gu, '');
   if (!letters || (letters !== letters.toUpperCase() && letters !== letters.toLowerCase())) {
@@ -195,12 +225,22 @@ function titleCaseIfNeeded(s) {
     .join(' ');
 }
 
+/**
+ * **Summary:** Converts plural role nouns to singular form so equivalent job titles produce consistent identities.
+ * **Inputs:** `s` is a candidate role title.
+ * **Returns:** The title with supported role nouns singularized.
+ */
 const singularizeRoleNouns = s =>
   s.replace(
     /\b(developer|engineer|programmer|architect|intern|internship|trainee|scientist|analyst|administrator|specialist|consultant|designer|tester|lead|manager|executive|officer|associate|coordinator|technician)s\b/gi,
     '$1'
   );
 
+/**
+ * **Summary:** Cleans a candidate role title, removes hiring boilerplate, standardizes role nouns, and restores readable casing.
+ * **Inputs:** `s` is raw role text extracted from the post.
+ * **Returns:** The finalized role title.
+ */
 function finalizeTitle(s) {
   let t = s.replace(/\s+/g, ' ').trim().replace(/^[\s:–—|/&+-]+|[\s:–—|/&+-]+$/g, '');
   let prev;
@@ -213,6 +253,11 @@ function finalizeTitle(s) {
 
 // All role phrases in a string, keeping only a contiguous "list"
 // ("Backend Developer, Frontend Developer and QA Engineer").
+/**
+ * **Summary:** Extracts a contiguous list of plausible role phrases while excluding requirement and responsibility wording.
+ * **Inputs:** `str` is a post line or hiring sentence that may name one or more roles.
+ * **Returns:** The plausible role-title phrases in their original order.
+ */
 function extractPhraseList(str) {
   const found = [];
   for (const m of String(str).matchAll(PHRASE_RE)) {
@@ -233,6 +278,11 @@ function extractPhraseList(str) {
 }
 
 // Value of a "Position: ..." style line -> [{title, context}]
+/**
+ * **Summary:** Parses the value of a labelled role line into cleaned titles and preserves parenthetical context for resume matching.
+ * **Inputs:** `value` is the text after a role label; `strong` allows unlabeled role wording from highly reliable labels.
+ * **Returns:** The accepted role candidates with their contextual qualifiers.
+ */
 function parseRoleValue(value, strong) {
   let v = String(value).replace(/#[\p{L}\p{N}_]+/gu, ' ');
   const context = [];
@@ -275,6 +325,11 @@ const STRONG_LABEL =
   '(?:job\\s+|open\\s+)?(?:position(?:\\s+title)?|role|job\\s*title|vacancy|designation|opening|hiring\\s+for)';
 const WEAK_LABEL =
   "(?:title|post|hiring|looking\\s+for|required|wanted|we(?:'|’)re\\s+hiring|now\\s+hiring)";
+/**
+ * **Summary:** Builds a matcher for a family of labelled role lines and captures the label's value.
+ * **Inputs:** `label` is the regular-expression source for accepted labels.
+ * **Returns:** A case-insensitive expression that captures the role text.
+ */
 const labelRe = label =>
   new RegExp(`(?:^|[|•]\\s*)${label}\\s*(?:[:：]|\\s[-–—]\\s)\\s*([^|•]+)`, 'i');
 const STRONG_RE = labelRe(STRONG_LABEL);
@@ -292,7 +347,17 @@ const HIRING_SENTENCES = [
 const NON_TITLE_LINE =
   /^(?:location|company|apply|salary|deadline|email|e-mail|subject|job\s*type|experience|send|contact|how\s+to\s+apply|requirements?|responsibilit|skills?|about|benefits?|what|who|why|qualification|note|dm|share|follow|like|repost|you(?:'|’)ll)\b/i;
 
+/**
+ * **Summary:** Finds job roles using caller overrides first, then labelled lines, hiring sentences, and finally cautious top-of-post inference.
+ * **Inputs:** No parameters; normalized request data and post lines are searched.
+ * **Returns:** Deduplicated role candidates with the extraction source and confidence.
+ */
 function searchRoles() {
+  /**
+   * **Summary:** Deduplicates role candidates by title and limits multi-role output to a manageable review set.
+   * **Inputs:** `list` contains role candidates in preference order.
+   * **Returns:** Up to five unique role candidates.
+   */
   const uniq = list => {
     const seen = new Set();
     return list.filter(c => {
@@ -368,6 +433,11 @@ const isInternship = !!role && /\bintern(?:ship)?\b/i.test(role);
 // -------------------- Company --------------------
 // Only from explicit text. The email domain is returned as a HINT only.
 
+/**
+ * **Summary:** Cleans an explicitly extracted company name without treating legal suffixes or post punctuation as identity.
+ * **Inputs:** `value` is company text from a request override or matched post line.
+ * **Returns:** The normalized company name.
+ */
 function cleanCompany(value) {
   return String(value || '')
     .normalize('NFKC')
@@ -455,6 +525,11 @@ const CITIES = [
   'london', 'toronto', 'berlin'
 ];
 
+/**
+ * **Summary:** Removes work-mode qualifiers and trailing punctuation from an extracted location.
+ * **Inputs:** `s` is location text from a labelled post line.
+ * **Returns:** The cleaned location name.
+ */
 const cleanLocation = s =>
   s
     .replace(/\s*\((?:on[ -]?site|remote|hybrid)\)/ig, '')
@@ -490,8 +565,18 @@ if (!location) {
 }
 
 const MODE_RE = /\bon[ -]?site\b|\bin[ -]office\b|\bremote\b|\bwork from home\b|\bwfh\b|\bhybrid\b/ig;
+/**
+ * **Summary:** Maps varied work-mode wording to the parser's standard on-site, remote, or hybrid values.
+ * **Inputs:** `raw` is a matched work-arrangement phrase.
+ * **Returns:** The standardized work mode.
+ */
 const toMode = raw =>
   /hybrid/i.test(raw) ? 'hybrid' : /remote|home|wfh/i.test(raw) ? 'remote' : 'on-site';
+/**
+ * **Summary:** Finds the distinct work arrangements mentioned in a section of job-post text.
+ * **Inputs:** `str` is the text to inspect for work-mode language.
+ * **Returns:** The unique standardized work modes found.
+ */
 const modesIn = str => [...new Set((str.match(MODE_RE) || []).map(toMode))];
 
 const modeLabelLines = lines.filter(l =>
@@ -541,6 +626,11 @@ const skills = Object.entries(skillPatterns)
 // -------------------- Resume catalogue --------------------
 // One entry per PDF in your resumes folder.
 
+/**
+ * **Summary:** Creates a resume-catalog record with its stable category, file location, skills, and applicant summary.
+ * **Inputs:** `id` identifies the category; `fileName` locates the resume; `skillList` and `summary` describe its fit.
+ * **Returns:** The normalized resume-catalog entry.
+ */
 const mkResume = (id, fileName, skillList, summary) => ({
   id,
   category: id,
@@ -576,6 +666,11 @@ const CATEGORY_ORDER = resumeCatalog.map(r => r.category);
 // -------------------- Resume scoring --------------------
 // score = best TITLE signal (0-10) + BODY signals (sum, capped at 8)
 
+/**
+ * **Summary:** Defines one weighted role or technology signal used to score resume suitability.
+ * **Inputs:** `k` names the signal; `re` recognizes it; `w` is its score contribution.
+ * **Returns:** The normalized scoring-signal record.
+ */
 const sig = (k, re, w) => ({ k, re, w });
 
 const TITLE_SIGNALS = {
@@ -681,9 +776,19 @@ const BODY_SIGNALS = {
 const UNSUPPORTED_RE =
   /\bjava\b|\bphp\b|\blaravel\b|\bwordpress\b|\bgolang\b|\bgo\s+(?:developer|engineer|lang)\b|\bruby\b|\brails\b|\brust\b|\bscala\b|c\+\+|\bembedded\b|\bsap\b|\bsalesforce\b|\bqa\b|\bsqa\b|quality assurance|\btester\b|\bsdet\b|\bui[\s/]*ux\b|\bgraphic\b|\bseo\b|\bmarketing\b|\bsales\b|\baccount(?:ant|s)?\b|\bhr\b|\brecruit/i;
 
+/**
+ * **Summary:** Removes generic AI-marketing modifiers that should not make a non-AI job select the AI resume.
+ * **Inputs:** `s` is the candidate role title.
+ * **Returns:** The title with non-specialist AI modifiers removed.
+ */
 const neutralizeAiModifiers = s =>
   s.replace(/\bai[\s-]*(?:first|powered|driven|enabled|native|assisted|augmented|based)\b/gi, ' ');
 
+/**
+ * **Summary:** Selects the strongest resume for a role using title and post signals while refusing weak or unsupported matches.
+ * **Inputs:** `titleText` combines the extracted role and its relevant context.
+ * **Returns:** The selected resume category, confidence, reason, scores, runner-up, and review notes.
+ */
 function pickResume(titleText) {
   // Caller override wins.
   if (typeof b.resumeCategory === 'string') {
@@ -786,6 +891,11 @@ function pickResume(titleText) {
 
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 
+/**
+ * **Summary:** Converts numeric date parts into a verified calendar date for stable application identity generation.
+ * **Inputs:** `year`, `month`, and `day` are the candidate date components.
+ * **Returns:** The ISO date, or `null` when the components do not form a real date.
+ */
 function toIsoDate(year, month, day) {
   const y = Number(year), m = Number(month), d = Number(day);
   if (!y || !m || !d) return null;
@@ -795,6 +905,11 @@ function toIsoDate(year, month, day) {
     : null;
 }
 
+/**
+ * **Summary:** Recognizes supported numeric and named-month deadline formats that include an unambiguous year.
+ * **Inputs:** `str` is a deadline line or nearby post text.
+ * **Returns:** The parsed ISO date, or `null` when no supported valid date is present.
+ */
 function parseDate(str) {
   let m;
   if ((m = str.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/))) {
@@ -815,7 +930,17 @@ function parseDate(str) {
 const DEADLINE_LABEL =
   /deadline|closing date|last date|apply (?:by|before|till|until)|closes? (?:on|by)|applications? close|due date|submit (?:by|before)/i;
 
+/**
+ * **Summary:** Builds a reviewable, stable application identity from the role, destination, location, company, and hiring deadline.
+ * **Inputs:** The input object supplies role, location, emails, company, deadline text, and form destinations.
+ * **Returns:** The application ID and base key, parsed deadline, identity method, and any ambiguity warnings.
+ */
 function makeApplicationIdentity({ role, location, emails = [], company, deadlineText = '', formLinks = [] }) {
+  /**
+   * **Summary:** Canonicalizes identity fields so harmless wording differences do not create duplicate application records.
+   * **Inputs:** `value` is a role, location, or company identity component.
+   * **Returns:** The normalized identity text.
+   */
   const normalize = value =>
     String(value || '')
       .normalize('NFKC')
@@ -866,6 +991,11 @@ function makeApplicationIdentity({ role, location, emails = [], company, deadlin
   let method;
   let destination;
 
+  /**
+   * **Summary:** Selects the single application form as the identity destination and removes non-identity tracking parameters.
+   * **Inputs:** No parameters; the enclosing identity request supplies one form link.
+   * **Returns:** No value; the identity method and destination are set to the canonical form.
+   */
   const useForm = () => {
     method = 'form';
     destination = String(formLinks[0]).trim().split('#')[0];
@@ -916,6 +1046,11 @@ function makeApplicationIdentity({ role, location, emails = [], company, deadlin
   };
 }
 
+/**
+ * **Summary:** Builds an application identity for one role using the post's selected destination, location, company, and deadline.
+ * **Inputs:** `roleTitle` is the role whose application identity should be generated.
+ * **Returns:** The role-specific application identity and review warnings.
+ */
 const identityFor = roleTitle =>
   makeApplicationIdentity({
     role: roleTitle,
@@ -961,11 +1096,21 @@ const overlappingSkills = skills
   .filter(skill => (selectedResume?.skills || []).includes(skill))
   .slice(0, 6);
 
+/**
+ * **Summary:** Formats a short list of skills as natural language for the application email draft.
+ * **Inputs:** `items` contains the selected skill names.
+ * **Returns:** A comma- and conjunction-separated list.
+ */
 const formatList = items =>
   items.length <= 2
     ? items.join(' and ')
     : `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 
+/**
+ * **Summary:** Extracts an employer-provided application email subject and resolves supported name and role placeholders.
+ * **Inputs:** `roleTitle` is the selected role used to replace role placeholders.
+ * **Returns:** The valid requested subject, or `null` when none is provided or placeholders remain unresolved.
+ */
 function findSubject(roleTitle) {
   for (const line of lines) {
     const m = line.match(/\bsubject(?:\s*line)?\s*[:：]\s*["“']?(.+?)["”']?\s*$/i);
@@ -982,6 +1127,11 @@ function findSubject(roleTitle) {
   return null;
 }
 
+/**
+ * **Summary:** Drafts a concise application email grounded in the selected role, company, resume, overlapping skills, and applicant profile.
+ * **Inputs:** No parameters; the selected extraction and resume context is used.
+ * **Returns:** The complete review-required email body.
+ */
 function buildEmailBody() {
   const skillsLine = overlappingSkills.length
     ? `My experience with ${formatList(overlappingSkills)} aligns closely with the requirements of this role.`

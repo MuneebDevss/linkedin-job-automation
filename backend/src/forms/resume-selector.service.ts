@@ -22,6 +22,11 @@ const UNSUPPORTED = /\bjava\b|\bphp\b|laravel|wordpress|golang|\bruby\b|\brust\b
 
 @Injectable()
 export class ResumeSelectorService {
+  /**
+   * **Summary:** Ranks the resume catalog against a job's role and skills and avoids selecting a weak or out-of-scope resume.
+   * **Inputs:** `job` contains the title and description; `catalog` contains approved resume profiles.
+   * **Returns:** The selected resume, confidence and reason, or no resume when the match is unreliable, plus all scores.
+   */
   select(job: JobAnswerContext, catalog: ResumeProfile[]): ResumeSelection {
     const title = job.title || '';
     const body = `${title}\n${job.description}`;
@@ -49,6 +54,11 @@ export class ResumeSelectorService {
     };
   }
 
+  /**
+   * **Summary:** Escapes a resume skill for safe matching against job text while preserving flexible whitespace.
+   * **Inputs:** `value` is the literal skill name.
+   * **Returns:** The regular-expression-safe skill text.
+   */
   private escape(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, ' ');
   }

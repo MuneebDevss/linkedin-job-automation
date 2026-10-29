@@ -17,8 +17,18 @@ export interface GeminiAnswer {
 export class GeminiService {
   private readonly logger = new Logger(GeminiService.name);
 
+  /**
+   * **Summary:** Creates the AI answer service with access to the configured model, credentials, and request limits.
+   * **Inputs:** `config` provides Gemini connection and timeout settings.
+   * **Returns:** A Gemini service instance ready to answer unresolved questions.
+   */
   constructor(private readonly config: ConfigService<AppConfiguration, true>) {}
 
+  /**
+   * **Summary:** Requests grounded answers for unresolved application questions using only supplied verified profile, resume, and job context.
+   * **Inputs:** `input` contains the job, trusted profile, selected resume, and unresolved questions.
+   * **Returns:** Validated typed Gemini answers with confidence, reuse guidance, and provenance.
+   */
   async answer(input: {
     job: JobAnswerContext;
     verifiedProfile: VerifiedProfile;
@@ -58,6 +68,11 @@ export class GeminiService {
     }
   }
 
+  /**
+   * **Summary:** Defines the safety and grounding rules that prevent the model from inventing application facts.
+   * **Inputs:** No parameters.
+   * **Returns:** The system instruction supplied to the AI model.
+   */
   private systemInstruction(): string {
     return [
       'Answer only the supplied unresolved job-application questions.',
@@ -71,6 +86,11 @@ export class GeminiService {
     ].join(' ');
   }
 
+  /**
+   * **Summary:** Defines the structured response contract required for safely interpreting AI-generated application answers.
+   * **Inputs:** No parameters.
+   * **Returns:** The schema describing valid answer records and typed values.
+   */
   private responseSchema(): Record<string, unknown> {
     return {
       type: 'OBJECT',
@@ -106,6 +126,11 @@ export class GeminiService {
     };
   }
 
+  /**
+   * **Summary:** Extracts the model's structured answer payload from a successful Gemini API response.
+   * **Inputs:** `body` is the untrusted response returned by Gemini.
+   * **Returns:** The JSON answer text without optional Markdown wrapping.
+   */
   private responseText(body: Record<string, unknown>): string {
     const candidates = body.candidates as Array<{content?: {parts?: Array<{text?: string}>}}> | undefined;
     const text = candidates?.[0]?.content?.parts?.map(part => part.text || '').join('').trim();
@@ -113,6 +138,11 @@ export class GeminiService {
     return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   }
 
+  /**
+   * **Summary:** Validates AI answer records against requested question IDs, uniqueness, confidence, reuse, and provenance requirements.
+   * **Inputs:** `value` is the parsed model response; `questions` defines the allowed targets.
+   * **Returns:** The validated Gemini answers with normalized typed values.
+   */
   private validate(value: unknown, questions: FormQuestion[]): GeminiAnswer[] {
     const raw = value as {answers?: unknown[]};
     if (!raw || !Array.isArray(raw.answers)) throw new Error('Gemini response is missing answers.');
@@ -130,6 +160,11 @@ export class GeminiService {
     });
   }
 
+  /**
+   * **Summary:** Converts the model's discriminated value object into the answer type used by the application.
+   * **Inputs:** `value` is the untrusted typed-value object returned by Gemini.
+   * **Returns:** A validated string, number, boolean, or string-list answer.
+   */
   private typedValue(value: unknown): AnswerValue {
     const typed = value as {
       kind?: string; stringValue?: unknown; numberValue?: unknown;

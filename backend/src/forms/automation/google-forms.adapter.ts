@@ -30,8 +30,18 @@ const LEGAL_DECLARATION = /\b(?:consent|certif(?:y|ication)|declare|declaration|
 export class GoogleFormsAdapter implements FormPlatformAdapter {
   readonly platform = 'google_forms';
 
+  /**
+   * **Summary:** Creates the Google Forms adapter with access to form-automation safety and timing settings.
+   * **Inputs:** `config` provides the settings that govern supported local forms and browser behavior.
+   * **Returns:** An adapter instance ready to inspect and operate supported forms.
+   */
   constructor(private readonly config: ConfigService<AppConfiguration, true>) {}
 
+  /**
+   * **Summary:** Determines whether a URL belongs to Google Forms or an explicitly allowed local test form.
+   * **Inputs:** `value` is the candidate form URL.
+   * **Returns:** `true` when this adapter supports the destination, otherwise `false`.
+   */
   supports(value: string): boolean {
     try {
       const url = new URL(value);
@@ -45,6 +55,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     }
   }
 
+  /**
+   * **Summary:** Reads the current form page into a stable question snapshot used for answer generation, filling, and change detection.
+   * **Inputs:** `page` is the visible form page; `pageIndex` identifies its position in a multi-page form.
+   * **Returns:** The page title, discovered questions, page index, and content signature.
+   */
   async inspect(page: Page, pageIndex: number): Promise<FormPageSnapshot> {
     const containers = page.locator(QUESTION_SELECTOR);
     const count = await containers.count();
@@ -73,6 +88,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return {title, pageIndex, questions, signature: await this.signature(page)};
   }
 
+  /**
+   * **Summary:** Detects conditions that require human intervention or make the form unavailable before automation proceeds.
+   * **Inputs:** `page` is the current form or redirect page.
+   * **Returns:** A classified blocker such as authentication, CAPTCHA, closure, or access denial, or `null` when clear.
+   */
   async detectBlocker(page: Page): Promise<FormBlocker | null> {
     const url = page.url();
     if (/accounts\.google\.com|\/(?:signin|login|sso|auth)(?:\/|\?|$)/i.test(url)) {
@@ -97,6 +117,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return null;
   }
 
+  /**
+   * **Summary:** Populates one form question using the interaction appropriate to its discovered control type.
+   * **Inputs:** `page` hosts the form; `question` identifies the control; `value` is the approved answer to enter.
+   * **Returns:** A promise that resolves after the field has been populated.
+   */
   async fill(page: Page, question: ExtractedFormQuestion, value: AnswerValue | string): Promise<void> {
     const container = this.container(page, question.containerIndex);
     const text = Array.isArray(value) ? value.join(', ') : String(value);
@@ -126,6 +151,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     }
   }
 
+  /**
+   * **Summary:** Confirms that an uploaded application document is attached and no longer in progress before submission continues.
+   * **Inputs:** `page` hosts the form; `question` identifies the upload control; `expectedFileName` and `timeoutMs` define the expected result and wait limit.
+   * **Returns:** `true` when the expected file is attached, otherwise `false`.
+   */
   async verifyFileAttachment(
     page: Page, question: ExtractedFormQuestion, expectedFileName: string, timeoutMs: number
   ): Promise<boolean> {
@@ -153,6 +183,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     }
   }
 
+  /**
+   * **Summary:** Reviews required fields and browser-reported constraints to prevent advancing with incomplete or invalid answers.
+   * **Inputs:** `page` is the populated form page; `questions` contains its discovered field definitions.
+   * **Returns:** A validation result containing the overall validity and every actionable issue.
+   */
   async validate(page: Page, questions: ExtractedFormQuestion[]): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     for (const question of questions.filter(item => item.required)) {
@@ -180,6 +215,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return {valid: issues.length === 0, issues};
   }
 
+  /**
+   * **Summary:** Determines whether the current form page can advance, submit, or has no recognized action.
+   * **Inputs:** `page` is the current form page.
+   * **Returns:** The next available form action and its visible label when applicable.
+   */
   async action(page: Page): Promise<FormAction> {
     const controls = page.locator('form button:visible, form [role="button"]:visible, input[type="submit"]:visible, [data-form-action]:visible');
     const count = await controls.count();
@@ -194,6 +234,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return next || {kind: 'none'};
   }
 
+  /**
+   * **Summary:** Activates the previously identified next or submit control on the form.
+   * **Inputs:** `page` hosts the form; `action` identifies the control and label to activate.
+   * **Returns:** A promise that resolves after the action is clicked, or immediately when no action is required.
+   */
   async clickAction(page: Page, action: FormAction): Promise<void> {
     if (action.kind === 'none') return;
     const exact = new RegExp(`^${this.escapeRegExp(action.label || action.kind)}$`, 'i');
@@ -211,6 +256,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     throw new Error(`Could not locate the ${action.kind} control.`);
   }
 
+  /**
+   * **Summary:** Waits for a multi-page form to replace its current questions after the user-facing next action.
+   * **Inputs:** `page` is the active form; `previousSignature` identifies the old page; `timeoutMs` limits the wait.
+   * **Returns:** A promise that resolves when a different question page is visible.
+   */
   async waitForNextPage(page: Page, previousSignature: string, timeoutMs: number): Promise<void> {
     await page.waitForFunction(({selector, signature}) => {
       const elements = [...document.querySelectorAll(selector)].filter(element => element.getClientRects().length > 0);
@@ -219,6 +269,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     }, {selector: '.Qr7Oae, [data-question], [role="listitem"]', signature: previousSignature}, {timeout: timeoutMs});
   }
 
+  /**
+   * **Summary:** Looks for reliable confirmation that the form provider accepted the application submission.
+   * **Inputs:** `page` is the post-submission page; `timeoutMs` limits how long confirmation may appear.
+   * **Returns:** Submission evidence with its message and URL, or `null` when success cannot be verified.
+   */
   async detectSubmissionSuccess(page: Page, timeoutMs: number): Promise<SubmissionEvidence | null> {
     const selector = '[data-submission-success]:visible, .freebirdFormviewerViewResponseConfirmationMessage:visible';
     const textPattern = /(?:your response has been recorded|response submitted|application (?:was )?submitted|thank you for (?:applying|your response))/i;
@@ -244,14 +299,29 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return message ? {kind: 'confirmation_message', message, url: page.url()} : null;
   }
 
+  /**
+   * **Summary:** Extracts the business-relevant label, field type, requirements, choices, and constraints from one visible question container.
+   * **Inputs:** `container` is the browser element containing one form question.
+   * **Returns:** The normalized control description used to build a form question.
+   */
   private async inspectControl(container: Locator): Promise<InspectedControl> {
     return container.evaluate(element => {
+      /**
+       * **Summary:** Determines whether a candidate control is presented to the applicant and should be included in inspection.
+       * **Inputs:** `node` is a control found within the question container.
+       * **Returns:** `true` when the control is visibly available, otherwise `false`.
+       */
       const visible = (node: Element): boolean => {
         const style = getComputedStyle(node);
         return style.display !== 'none' && style.visibility !== 'hidden';
       };
       const controls = [...element.querySelectorAll('input, textarea, select, [role="radio"], [role="checkbox"], [role="listbox"]')]
         .filter(visible);
+      /**
+       * **Summary:** Finds the first descendant matching a control or metadata selector within the current question.
+       * **Inputs:** `selector` describes the descendant to locate.
+       * **Returns:** The matching element, or `null` when it is absent.
+       */
       const query = (selector: string) => element.querySelector(selector);
       const input = controls.find(node => node.tagName === 'INPUT') as HTMLInputElement | undefined;
       let kind: InspectedControl['kind'] = 'unsupported';
@@ -290,14 +360,29 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     });
   }
 
+  /**
+   * **Summary:** Maps a discovered browser control to the answer type understood by the answer engine.
+   * **Inputs:** `kind` is the inspected form-control category.
+   * **Returns:** The compatible answer field type.
+   */
   private answerType(kind: ExtractedFormQuestion['controlKind']): FieldType {
     return kind === 'file' || kind === 'unsupported' ? 'text' : kind;
   }
 
+  /**
+   * **Summary:** Locates a question container by its stable visible order on the current form page.
+   * **Inputs:** `page` hosts the form; `index` is the question's visible container position.
+   * **Returns:** A locator for the requested question container.
+   */
   private container(page: Page, index: number): Locator {
     return page.locator(QUESTION_SELECTOR).nth(index);
   }
 
+  /**
+   * **Summary:** Selects the requested radio or checkbox choices while enforcing single- or multi-choice behavior.
+   * **Inputs:** `container` holds the question; `requested` lists answer labels; `multiple` permits more than one selection.
+   * **Returns:** A promise that resolves after matching options are selected.
+   */
   private async chooseOptions(container: Locator, requested: string[], multiple: boolean): Promise<void> {
     const candidates = container.locator(multiple ? 'input[type="checkbox"], [role="checkbox"]' : 'input[type="radio"], [role="radio"]');
     const count = await candidates.count();
@@ -316,6 +401,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     if (!selected) throw new Error(`No selectable option matched “${requested.join(', ')}”.`);
   }
 
+  /**
+   * **Summary:** Chooses a requested value from either a native select field or an accessible listbox.
+   * **Inputs:** `page` hosts popup options; `container` holds the question; `value` is the option label to choose.
+   * **Returns:** A promise that resolves after the option is selected.
+   */
   private async chooseSelect(page: Page, container: Locator, value: string): Promise<void> {
     const native = container.locator('select').first();
     if (await native.count()) {
@@ -328,6 +418,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     await option.click();
   }
 
+  /**
+   * **Summary:** Attaches an application document through the form's direct or embedded upload control.
+   * **Inputs:** `page` hosts any embedded picker; `container` holds the upload question; `path` identifies the approved document.
+   * **Returns:** A promise that resolves after the file has been assigned to an upload control.
+   */
   private async attachFile(page: Page, container: Locator, path: string): Promise<void> {
     const direct = container.locator('input[type="file"]').first();
     if (await direct.count()) {
@@ -350,6 +445,11 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     throw new Error('The file picker did not expose an upload control.');
   }
 
+  /**
+   * **Summary:** Checks whether a form question currently contains a meaningful answer for its control type.
+   * **Inputs:** `container` holds the question; `kind` identifies how its answer is represented.
+   * **Returns:** `true` when the field is answered, otherwise `false`.
+   */
   private async isAnswered(container: Locator, kind: ExtractedFormQuestion['controlKind']): Promise<boolean> {
     if (kind === 'radio' || kind === 'checkbox') {
       const selected = container.locator('input:checked, [aria-checked="true"]');
@@ -367,19 +467,39 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     return Boolean((await container.locator('input:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]):not([type="file"])').first().inputValue()).trim());
   }
 
+  /**
+   * **Summary:** Builds a stable summary of the current question page for detecting multi-page form transitions.
+   * **Inputs:** `page` is the current form page.
+   * **Returns:** A normalized signature derived from the visible questions.
+   */
   private async signature(page: Page): Promise<string> {
     const texts = await page.locator(QUESTION_SELECTOR).allInnerTexts();
     return texts.map(value => value.replace(/\s+/g, ' ').trim()).join('|');
   }
 
+  /**
+   * **Summary:** Normalizes human-written labels so form choices can be matched despite casing, punctuation, or Unicode differences.
+   * **Inputs:** `value` is the label or answer text to normalize.
+   * **Returns:** The normalized comparison text.
+   */
   private normalize(value: string): string {
     return value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   }
 
+  /**
+   * **Summary:** Escapes user-facing text for safe use in an exact regular-expression match.
+   * **Inputs:** `value` is the literal text to protect.
+   * **Returns:** The regular-expression-safe text.
+   */
   private escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  /**
+   * **Summary:** Escapes an option label for safe inclusion in a CSS attribute selector.
+   * **Inputs:** `value` is the literal attribute value to protect.
+   * **Returns:** The selector-safe attribute text.
+   */
   private cssEscape(value: string): string {
     return value.replace(/["\\]/g, '\\$&');
   }
