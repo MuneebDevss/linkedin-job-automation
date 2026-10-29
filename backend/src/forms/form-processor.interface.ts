@@ -6,7 +6,7 @@ export interface FormProcessingInput {
 }
 
 export interface FormProcessingResult {
-  status: 'completed' | 'needs_manual_action' | 'failed';
+  status: 'completed' | 'needs_manual_action' | 'failed' | 'submission_unknown';
   details?: unknown;
 }
 
@@ -14,7 +14,7 @@ export interface FormProcessor {
   /**
    * **Summary:** Processes one form-based application and reports whether it completed, failed, or requires human action.
    * **Inputs:** `input` contains the workflow identity, application identity, candidate form URLs, and job-post text.
-   * **Returns:** The form-processing result and any platform-specific details.
+   * **Returns:** The form-processing result and any platform-specific details, including an explicit uncertain-submission state.
    */
   process(input: FormProcessingInput): Promise<FormProcessingResult>;
 }

@@ -38,6 +38,8 @@ export interface FormAction {
 export interface FillRecord {
   questionId: string;
   label: string;
+  fieldType: FieldType | 'file';
+  required: boolean;
   source: GeneratedAnswer['provenance']['source'] | 'resume' | 'application_document' | 'configured_consent';
   confidence: GeneratedAnswer['confidence'] | 'high';
   value: AnswerValue | string;

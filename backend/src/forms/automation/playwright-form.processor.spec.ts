@@ -240,7 +240,7 @@ describe('PlaywrightFormProcessor with safe local mock forms', () => {
     const result = await processor.process({
       jobId: 'unconfirmed-mock', applicationId: 'safe-app', formUrls: [`${origin}/form`], text: 'Developer role'
     });
-    expect(result.status).toBe('needs_manual_action');
+    expect(result.status).toBe('submission_unknown');
     expect(result.details).toMatchObject({submission: {attempted: true}});
     expect((result.details as {issues: Array<{code: string}>}).issues).toEqual(expect.arrayContaining([
       expect.objectContaining({code: 'submission_unconfirmed'})

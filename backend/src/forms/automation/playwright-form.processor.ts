@@ -21,6 +21,9 @@ interface AutomationDetails {
   url?: string;
   attempts: number;
   pages: Array<{pageIndex: number; title: string; questions: number}>;
+  questions: Array<{
+    questionId: string; pageIndex: number; label: string; fieldType: string; required: boolean;
+  }>;
   filled: FillRecord[];
   issues: FormIssue[];
   screenshots: string[];
@@ -57,7 +60,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
    */
   async process(input: FormProcessingInput): Promise<FormProcessingResult> {
     const details: AutomationDetails = {
-      attempts: 0, pages: [], filled: [], issues: [], screenshots: [], browserErrors: [], attachments: [],
+      attempts: 0, pages: [], questions: [], filled: [], issues: [], screenshots: [], browserErrors: [], attachments: [],
       submission: {attempted: false}
     };
     if (!this.config.get('formAutomationEnabled', {infer: true})) {
@@ -92,7 +95,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
             code: 'submission_state_unknown',
             message: 'The browser failed after submission began, so the job was not retried to avoid a duplicate application.'
           });
-          return {status: 'needs_manual_action', details};
+          return {status: 'submission_unknown', details};
         }
         if (attempt === attempts) {
           details.issues.push({code: 'browser_failure', message});
@@ -124,6 +127,10 @@ export class PlaywrightFormProcessor implements FormProcessor {
     for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
       const snapshot = await adapter.inspect(page, pageIndex);
       details.pages.push({pageIndex, title: snapshot.title, questions: snapshot.questions.length});
+      details.questions.push(...snapshot.questions.map(question => ({
+        questionId: question.id, pageIndex, label: question.label,
+        fieldType: question.controlKind, required: Boolean(question.required)
+      })));
       if (!snapshot.questions.length) {
         return this.manualWithScreenshot(page, input.jobId, details, 'no_questions', 'No supported form questions were visible.');
       }
@@ -165,7 +172,8 @@ export class PlaywrightFormProcessor implements FormProcessor {
           try {
             await this.fillWithRetries(adapter, page, question, consentValue);
             details.filled.push({
-              questionId: question.id, label: question.label, source: 'configured_consent', confidence: 'high', value: consentValue
+              questionId: question.id, label: question.label, fieldType: question.type, required: Boolean(question.required),
+              source: 'configured_consent', confidence: 'high', value: consentValue
             });
           } catch (error) {
             pageIssues.push(this.fillIssue(question, error));
@@ -192,6 +200,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
             await this.attachFileWithRetries(adapter, page, question, path, selected.document.fileName);
             details.filled.push({
               questionId: question.id, label: question.label,
+              fieldType: 'file', required: Boolean(question.required),
               source: selected.kind === 'resume' ? 'resume' : 'application_document', confidence: 'high', value: path
             });
             details.attachments.push({
@@ -219,7 +228,8 @@ export class PlaywrightFormProcessor implements FormProcessor {
         try {
           await this.fillWithRetries(adapter, page, question, answer.value);
           details.filled.push({
-            questionId: question.id, label: question.label, source: answer.provenance.source,
+            questionId: question.id, label: question.label, fieldType: question.type, required: Boolean(question.required),
+            source: answer.provenance.source,
             confidence: answer.confidence, value: answer.value
           });
         } catch (error) {
@@ -269,7 +279,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
       if (!evidence) {
         const afterSubmit = await adapter.validate(page, snapshot.questions);
         details.issues.push(...afterSubmit.issues);
-        return this.manualWithScreenshot(page, input.jobId, details, 'submission_unconfirmed',
+        return this.unknownWithScreenshot(page, input.jobId, details, 'submission_unconfirmed',
           'Submit was clicked, but no reliable submission confirmation was detected.');
       }
       details.submission = {attempted: true, evidence};
@@ -301,6 +311,16 @@ export class PlaywrightFormProcessor implements FormProcessor {
     const screenshot = await this.artifacts.screenshot(page, jobId, code);
     if (screenshot) details.screenshots.push(screenshot);
     return {status: 'needs_manual_action', details};
+  }
+
+  /** Records an uncertain post-submit outcome without allowing an automatic retry. */
+  private async unknownWithScreenshot(
+    page: Page, jobId: string, details: AutomationDetails, code: string, message: string
+  ): Promise<FormProcessingResult> {
+    details.issues.push({code, message});
+    const screenshot = await this.artifacts.screenshot(page, jobId, code);
+    if (screenshot) details.screenshots.push(screenshot);
+    return {status: 'submission_unknown', details};
   }
 
   /**

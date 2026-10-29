@@ -29,6 +29,12 @@ export interface AppConfiguration {
   formAuthCdpUrl: string;
   playwrightHeadless: boolean;
   playwrightBrowserExecutablePath: string;
+  googleSheetsSyncEnabled: boolean;
+  googleSheetsSpreadsheetId: string;
+  googleSheetsTab: string;
+  googleSheetsCredentialPath: string;
+  googleSheetsAccessToken: string;
+  googleSheetsTimeoutMs: number;
 }
 
 /**
@@ -122,6 +128,14 @@ export default (): AppConfiguration => {
     throw new Error('HOST must remain loopback, or 0.0.0.0 only inside a locally published container.');
   }
 
+  const googleSheetsSpreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+    '1CgddJkpyd5zaL1plm5yc9Zkwg_OwASgniBjPWbMduwA';
+  if (!/^[A-Za-z0-9_-]+$/.test(googleSheetsSpreadsheetId)) {
+    throw new Error('GOOGLE_SHEETS_SPREADSHEET_ID is invalid.');
+  }
+  const googleSheetsTab = (process.env.GOOGLE_SHEETS_TAB || 'Applications').trim();
+  if (!googleSheetsTab || googleSheetsTab.length > 100) throw new Error('GOOGLE_SHEETS_TAB is invalid.');
+
   return {
     host,
     port: integer('PORT', 3000),
@@ -152,6 +166,13 @@ export default (): AppConfiguration => {
     formAuthLoginTimeoutMs: integer('FORM_AUTH_LOGIN_TIMEOUT_MS', 300000),
     formAuthCdpUrl: authenticationCdpUrl(),
     playwrightHeadless: boolean('PLAYWRIGHT_HEADLESS', true),
-    playwrightBrowserExecutablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE_PATH || ''
+    playwrightBrowserExecutablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE_PATH || '',
+    googleSheetsSyncEnabled: boolean('GOOGLE_SHEETS_SYNC_ENABLED', false),
+    googleSheetsSpreadsheetId,
+    googleSheetsTab,
+    googleSheetsCredentialPath: process.env.GOOGLE_SHEETS_CREDENTIALS_PATH
+      ? resolve(process.env.GOOGLE_SHEETS_CREDENTIALS_PATH) : '',
+    googleSheetsAccessToken: process.env.GOOGLE_SHEETS_ACCESS_TOKEN || '',
+    googleSheetsTimeoutMs: integer('GOOGLE_SHEETS_TIMEOUT_MS', 15000)
   };
 };

@@ -33,4 +33,11 @@ export class JobsController {
   get(@Param('applicationId') applicationId: string) {
     return this.jobs.get(applicationId);
   }
+
+  /** Retries only Google Sheets synchronization; application workflows are never re-executed. */
+  @Post(':applicationId/sync')
+  @HttpCode(HttpStatus.OK)
+  sync(@Param('applicationId') applicationId: string) {
+    return this.jobs.retrySheetSync(applicationId);
+  }
 }

@@ -20,6 +20,11 @@ Copy `.env.example` to `.env` for direct local development and Compose. Compose 
 - `FORM_AUTH_CDP_URL`: optional, desktop-only, unauthenticated loopback HTTP origin for attaching to a separately launched Chrome instance with a dedicated profile. Do not configure or expose it in Docker.
 - `PLAYWRIGHT_HEADLESS`: keep enabled for normal backend operation. `PLAYWRIGHT_BROWSER_EXECUTABLE_PATH` can select an explicitly managed Chromium build.
 - `FORM_ALLOW_LOCALHOST`: exists for mock-form tests only and must remain false in normal operation.
+- `GOOGLE_SHEETS_SYNC_ENABLED`: enables backend-owned form tracking without changing the n8n email workflow.
+- `GOOGLE_SHEETS_SPREADSHEET_ID` and `GOOGLE_SHEETS_TAB`: default to the Pakistan Job Application Tracker and `Applications` tab.
+- `GOOGLE_SHEETS_CREDENTIALS_PATH`: service-account JSON path. Share only the tracker spreadsheet with its service-account email; credentials are never stored in application rows.
+- `GOOGLE_SHEETS_ACCESS_TOKEN`: optional short-lived development alternative to a credential file.
+- `GOOGLE_SHEETS_TIMEOUT_MS`: positive Sheets/OAuth request timeout.
 
 Never publish port 3000 or 5678 on a non-loopback interface without authentication and HTTPS.
 
@@ -32,19 +37,23 @@ Request:
   "text": "We are hiring. Apply at jobs@example.com",
   "url": "https://www.linkedin.com/feed/update/urn:li:activity:123/",
   "links": ["https://forms.gle/example"],
-  "capturedAt": "2026-10-27T12:00:00.000Z"
+  "capturedAt": "2026-10-27T12:00:00.000Z",
+  "company": "Example Ltd (optional)",
+  "role": "Backend Developer (optional)",
+  "location": "Islamabad (optional)"
 }
 ```
 
-The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. The email and form branches run independently, so a failure in one does not stop the other. A `duplicate: true` flag means a previously completed outcome was reused. Retry-safe form outcomes in `failed` or `needs_manual_action` are run again and return `duplicate: false`; outcomes where submission already started are never retried automatically.
+The response contains `applicationId`, classification `method`, normalized destinations, and independent `workflows.email` and `workflows.form` objects. The email and form branches run independently, so a failure in one does not stop the other. A `duplicate: true` flag means a previously completed outcome was reused. A repeated request atomically retries an email workflow whose durable status is `failed`; completed or currently processing email workflows are not started again. Retry-safe form outcomes in `failed` or `needs_manual_action` are also run again and return `duplicate: false`; form outcomes where submission already started are never retried automatically.
 
 For a supported Google Forms URL, the form workflow creates a fresh isolated Playwright browser context, inspects one page at a time, asks the profile engine for answers, selects the matching resume, validates the page, follows `Next`, and submits the final page. Its terminal statuses are:
 
 - `completed`: a Google Forms confirmation message or confirmation container was detected after submission;
-- `needs_manual_action`: automation stopped safely for CAPTCHA, authentication, a closed form, an unsupported or unresolved required field, missing legal consent, failed validation, or unconfirmed submission;
+- `needs_manual_action`: automation stopped safely before submission for CAPTCHA, authentication, a closed form, an unsupported or unresolved required field, missing legal consent, or failed validation;
+- `submission_unknown`: Submit was clicked but confirmation could not be established, or the browser failed after submission began; this status is never retried automatically;
 - `failed`: browser infrastructure or navigation failed after bounded retries.
 
-The backend does not treat clicking Submit as success. A post-click response with no reliable confirmation becomes `needs_manual_action` and is not retried, avoiding an accidental duplicate submission.
+The backend does not treat clicking Submit as success. A post-click response with no reliable confirmation becomes `submission_unknown`, avoiding an accidental duplicate submission.
 
 Google Forms support includes short/long text, numeric and date inputs, radio buttons, checkboxes, native and Google-style dropdowns, multi-page navigation, and file uploads. Other form platforms intentionally return `needs_manual_action` through the adapter registry until a dedicated adapter is added.
 
@@ -63,7 +72,7 @@ Example legal consent configuration (use the normalized lower-case label shown b
 }
 ```
 
-Screenshots are captured for actionable failures and stored under one job-specific folder. Browser/page errors, missing fields, validation failures, selected resume metadata, filled-field provenance, and submission evidence are stored in the form workflow's `response` object.
+Screenshots are captured for actionable failures and stored under one job-specific folder. The original audit object remains in the form workflow's `response`, while SQLite also stores the latest normalized question/answer state and an immutable record for every form attempt. Stored answer sources are normalized to `profile`, `derived`, `approved_memory`, `gemini`, `attachment`, or `consent`.
 
 ### Persistent authentication
 
@@ -118,7 +127,13 @@ The file must exist inside `APPLICATION_DOCUMENTS_DIRECTORY`. Before submission,
 
 ## `GET /api/jobs/:applicationId`
 
-Returns the stored classification and workflow statuses. URL-encode application IDs containing colons before constructing the request URL.
+Returns job metadata and timestamps, original LinkedIn and application URLs, selected resume, independent workflow statuses, normalized form questions/answers, all submission attempts and evidence, errors, and independent `sheetsSync` state. URL-encode application IDs containing colons before constructing the request URL.
+
+## `POST /api/jobs/:applicationId/sync`
+
+Retries only Google Sheets synchronization for an existing application. It never executes n8n, opens a browser, or resubmits a form. A failed sync remains durable in SQLite and can be retried through this endpoint or a duplicate capture.
+
+The backend owns form-specific tracker columns and preserves n8n/manual values. It adds `Application ID`, `Application URL`, `Form Status`, `Form Updated At`, `Submission Evidence`, `Form Resume`, and `Form Notes` only when missing. Existing rows are matched by stable application ID; `Job Link` is used only to adopt a legacy n8n row and always remains the original LinkedIn URL. `Status` and `Notes` remain n8n/manual-owned.
 
 ## `POST /api/forms/answers`
 

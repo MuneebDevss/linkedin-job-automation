@@ -23,4 +23,22 @@ export class ProcessJobDto {
 
   @IsISO8601({strict: true})
   capturedAt!: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(300)
+  @Transform(({value}) => typeof value === 'string' ? value.trim() || undefined : value)
+  company?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(300)
+  @Transform(({value}) => typeof value === 'string' ? value.trim() || undefined : value)
+  role?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(300)
+  @Transform(({value}) => typeof value === 'string' ? value.trim() || undefined : value)
+  location?: string;
 }

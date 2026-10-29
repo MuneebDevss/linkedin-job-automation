@@ -30,7 +30,7 @@ Open LinkedIn and expand “see more”, then select the desired job-post text b
 
 Shortened `lnkd.in` URLs remain visible in the editable preview and are resolved by the backend only after you click Send. Resolution permits only HTTPS, validates DNS results and every redirect destination against private/network-local ranges, limits redirect depth, response size, and duration, and reads LinkedIn's marked external destination from its safety-interstitial page. Failure keeps the original URL.
 
-Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For Google Forms, it creates a durable workflow record, opens an isolated browser context, fills reliable profile-engine answers, uploads the selected resume, validates each page, and submits only when the form is eligible. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch.
+Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For Google Forms, it creates a durable workflow record, opens an isolated browser context, fills reliable profile-engine answers, uploads the selected resume, validates each page, and submits only when the form is eligible. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch; a durably failed email workflow is atomically retried by the next identical request, while a completed draft is reused without calling n8n again. SQLite also retains normalized form questions, answer provenance, submission attempts, evidence, and Sheets synchronization state; no per-application JSON files are created.
 
 Form processing can take longer than the email flow. Keep the popup open while Send is running when you want to see the result immediately. The durable status is also available through `GET /api/jobs/:applicationId`.
 
@@ -42,7 +42,15 @@ Review [the local profile](backend/data/profile.json) before use. Existing suppl
 
 Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in `backend/.env` before starting Compose. Accepted medium/high-confidence Gemini answers are saved in `generatedSuggestions` and reused before another model call. Answers Gemini marks reusable may cross compatible jobs; job-specific answers are restricted to the exact job fingerprint. They never overwrite verified fields. Dates, salary, identity, and other factual answers still require verified profile data or deterministic derivation. The [API documentation](backend/API.md) contains the schema and [sample request](backend/examples/form-answers.input.json) and [sample output](backend/examples/form-answers.output.json).
 
-Automatic submission requires both `FORM_AUTO_SUBMIT=true` and `verified.automationConsents.automaticSubmission=true`. Required legal declarations are never delegated to Gemini: add an exact normalized declaration label to `verified.automationConsents.legalDeclarations` only after you have explicitly chosen to accept it. CAPTCHA, authentication, inaccessible/closed forms, unsupported required controls, unresolved required facts, failed validation, and unconfirmed submissions stop with `needs_manual_action`.
+Automatic submission requires both `FORM_AUTO_SUBMIT=true` and `verified.automationConsents.automaticSubmission=true`. Required legal declarations are never delegated to Gemini: add an exact normalized declaration label to `verified.automationConsents.legalDeclarations` only after you have explicitly chosen to accept it. CAPTCHA, authentication, inaccessible/closed forms, unsupported required controls, unresolved required facts, and failed validation stop with `needs_manual_action`. Once Submit has been clicked, missing confirmation evidence produces `submission_unknown`, which is never retried automatically.
+
+## Application history and tracker synchronization
+
+`GET /api/jobs/:applicationId` returns the stored job metadata, original LinkedIn URL, resolved application URL, selected resume, independent workflows, normalized questions/answers, every form attempt, confirmation evidence, errors, and Sheets sync state. `POST /api/jobs/:applicationId/sync` retries only tracker synchronization and never repeats Gmail or form work.
+
+The backend can synchronize form outcomes to the existing **Pakistan Job Application Tracker** → **Applications** tab. Set `GOOGLE_SHEETS_SYNC_ENABLED=true` and place a service-account JSON file at `backend/data/playwright/google-service-account.json`, then share the spreadsheet with that service-account email. The file is ignored by Git and is available in Compose through the existing read/write authentication-state mount. n8n OAuth credentials remain encrypted inside n8n and are not copied or extracted.
+
+The backend adds only missing tracking columns: `Application ID`, `Application URL`, `Form Status`, `Form Updated At`, `Submission Evidence`, `Form Resume`, and `Form Notes`. It matches `Application ID` first, adopts an older n8n row by `Job Link` only when necessary, and then stores the stable ID. Existing `Status`, `Notes`, and manually populated shared fields are preserved. For mixed applications, n8n continues to own email-draft updates while the backend owns the form-specific columns.
 
 The verified profile also records positive preferences for onsite work, relocation, night/different shifts, flexible hours, willingness to learn, and negotiable salary. These deterministic answers take priority over Gemini. Salary amounts still remain tied to configured seniority, currency, and monthly/annual periods; flexibility only permits the nearest listed range when the exact amount is unavailable.
 
@@ -89,7 +97,7 @@ npx playwright install chromium
 npm test
 ```
 
-The mock suite covers two-page navigation, text, textarea, radio, checkbox, select, date, verified resume upload, persisted authenticated sessions, expired-session detection, preference-based answers, flexible salary ranges, confirmed automatic submission, CAPTCHA blocking, legal-consent blocking, and a Submit click without confirmation evidence.
+The suite covers schema migration, structured answer/attempt persistence, Sheets row adoption and duplicate prevention, mixed email/form retries, two-page navigation, text, textarea, radio, checkbox, select, date, verified resume upload, persisted authenticated sessions, expired-session detection, preference-based answers, flexible salary ranges, confirmed automatic submission, CAPTCHA blocking, legal-consent blocking, and a Submit click without confirmation evidence.
 
 ## Manual extension test checklist
 
@@ -117,6 +125,6 @@ The mock suite covers two-page navigation, text, textarea, radio, checkbox, sele
 - CDP capture requires a desktop Chrome/Chromium instance on the same machine as the authentication CLI. It is intentionally restricted to loopback and is not a remote or container authentication mechanism.
 - Playwright screenshots for failures are written under the configured form-artifacts directory. They may contain application data, so keep that directory local and private.
 - An empty `API_TOKEN` is acceptable only while ports remain loopback-only. Configure a token and HTTPS before any broader exposure.
-- Live Gmail/Google Sheets credentials are not exercised by the mock-form tests.
+- Live Gmail/Google Sheets credentials are not exercised by tests; the Sheets API is mocked so no tracker row is changed.
 
 Official references: https://docs.n8n.io/hosting/installation/docker/ and https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/

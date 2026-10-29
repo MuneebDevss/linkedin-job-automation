@@ -1,5 +1,10 @@
 // =====================================================================
-// Job-post parser (n8n Code node, "Run once for all items")  v0.4.0
+// Job-post parser (n8n Code node, "Run once for all items")  v0.6.0
+//
+// v0.6.0: roles from ALL sources (generic ones like "Paid Intern" lose to specific
+//         ones), emoji role lines, hashtags, fallback resume, role inference.
+// v0.5.0: bullet-list roles ("the following positions:"), and level-first
+//         ranking for multi-role posts (see CONFIG).
 //
 // What changed vs 0.3.2
 //  - Role: 5-tier extraction (override > labelled line > hiring sentence
@@ -14,7 +19,19 @@
 
 const CONFIG = {
   throwWhenNoApplicationId: false, // true = old behaviour (throw)
-  resumeDir: '/files/resumes'
+  resumeDir: '/files/resumes',
+
+  // Multi-role posts: roles are ranked by LEVEL first, then by ROLE TYPE.
+  // Lower index = higher priority.
+  //   level order : junior/entry > intern > mid > senior
+  //   a title with no level word is treated as `unspecifiedLevel`
+  unspecifiedLevel: 'mid',
+  categoryPriority: ['fullstack', 'ai', 'python', 'devops', 'mobile', 'dotnet'],
+
+  // Software-style role but no recognisable stack (or a stack you have no
+  // resume for, e.g. Java/QA)? Use this resume instead of stopping.
+  // Set to null to go back to "no resume -> manual review".
+  fallbackResumeCategory: 'fullstack'
 };
 
 const profile = {
@@ -53,23 +70,10 @@ const lines = normalizedText
   .map(line => line.replace(/[ \t]+/g, ' ').trim())
   .filter(Boolean);
 
-/**
- * **Summary:** Removes decorative leading characters so a post line can be classified by its meaningful text.
- * **Inputs:** `s` is a normalized job-post line.
- * **Returns:** The line beginning at its first meaningful letter, number, or role punctuation.
- */
 const stripLead = s => s.replace(/^[^\p{L}\p{N}.#+]+/u, '').trim();
-/**
- * **Summary:** Identifies lines made entirely of hashtags so they do not influence role or company extraction.
- * **Inputs:** `s` is a normalized job-post line.
- * **Returns:** `true` when the line contains only hashtags, otherwise `false`.
- */
 const isHashtagOnly = s => /^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(s);
-/**
- * **Summary:** Identifies bullet-point lines that usually describe requirements rather than the primary job title.
- * **Inputs:** `s` is a normalized job-post line.
- * **Returns:** `true` when the line starts with a recognized bullet marker, otherwise `false`.
- */
+const isListItem = s =>
+  /^(?:[^\p{L}\p{N}\s]|\d{1,2}[.)]\s)/u.test(s) && !/^[#.+]/.test(s);
 const isBullet = s => /^[-•*·▪●◦‣✔✅☑➤➢►]/u.test(s);
 
 // -------------------- Emails and links --------------------
@@ -111,15 +115,10 @@ for (const link of Array.isArray(b.links) ? b.links : []) {
   }
 }
 
-const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform\.com|tally\.so|airtable\.com\/shr|jotform|greenhouse\.io|lever\.co|ashbyhq\.com|evahires\.com\/jobs|workable\.com|smartrecruiters|bamboohr|breezy\.hr|recruitee|zohorecruit|jazzhr|myworkdayjobs|workday|\/apply\b|\/application\b/i;
+const FORM_RE = /forms\.gle|docs\.google\.com\/forms|forms\.office\.com|typeform\.com|tally\.so|airtable\.com\/shr|jotform|greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|smartrecruiters|bamboohr|breezy\.hr|recruitee|zohorecruit|jazzhr|myworkdayjobs|workday|\/apply\b|\/application\b/i;
 const formCandidates = links.filter(link => FORM_RE.test(link));
 
 // Pick ONE recipient when the post lists several emails.
-/**
- * **Summary:** Selects one application recipient using an explicit override, application wording, and HR-style address signals without guessing through ambiguity.
- * **Inputs:** No parameters; captured request data, extracted emails, and post lines are evaluated.
- * **Returns:** The chosen email and selection reason, or a null email when no unique recipient is reliable.
- */
 function chooseApplicationEmail() {
   if (typeof b.applyEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.applyEmail.trim())) {
     return { email: b.applyEmail.trim().toLowerCase(), reason: 'provided' };
@@ -173,11 +172,6 @@ const REJECT = new Set([
   'can', 'may', 'work', 'works', 'working', 'mentoring', 'mentor'
 ]);
 
-/**
- * **Summary:** Reduces a role-phrase token to plain lowercase wording for stop-word and rejection checks.
- * **Inputs:** `w` is a token from a candidate role phrase.
- * **Returns:** The token without surrounding non-letter punctuation.
- */
 const bare = w =>
   w.toLowerCase().replace(/’/g, "'").replace(/^[^a-z']+|[^a-z']+$/g, '');
 
@@ -199,11 +193,6 @@ const ACRONYMS = {
   javascript: 'JavaScript', typescript: 'TypeScript', n8n: 'n8n'
 };
 
-/**
- * **Summary:** Applies readable title casing to all-uppercase or all-lowercase role text while preserving established technology names.
- * **Inputs:** `s` is a cleaned role title.
- * **Returns:** The human-readable title with recognized acronyms and product casing.
- */
 function titleCaseIfNeeded(s) {
   const letters = s.replace(/[^\p{L}]/gu, '');
   if (!letters || (letters !== letters.toUpperCase() && letters !== letters.toLowerCase())) {
@@ -225,22 +214,35 @@ function titleCaseIfNeeded(s) {
     .join(' ');
 }
 
-/**
- * **Summary:** Converts plural role nouns to singular form so equivalent job titles produce consistent identities.
- * **Inputs:** `s` is a candidate role title.
- * **Returns:** The title with supported role nouns singularized.
- */
 const singularizeRoleNouns = s =>
   s.replace(
     /\b(developer|engineer|programmer|architect|intern|internship|trainee|scientist|analyst|administrator|specialist|consultant|designer|tester|lead|manager|executive|officer|associate|coordinator|technician)s\b/gi,
     '$1'
   );
 
-/**
- * **Summary:** Cleans a candidate role title, removes hiring boilerplate, standardizes role nouns, and restores readable casing.
- * **Inputs:** `s` is raw role text extracted from the post.
- * **Returns:** The finalized role title.
- */
+const FILLER_WORDS = new Set([
+  'paid', 'unpaid', 'motivated', 'talented', 'passionate', 'dynamic', 'energetic',
+  'enthusiastic', 'ambitious', 'new', 'summer', 'winter', 'remote', 'onsite',
+  'on-site', 'hybrid', 'full-time', 'fulltime', 'part-time', 'parttime',
+  'temporary', 'urgent', 'urgently', 'immediate', 'immediately', 'multiple',
+  'various', 'experienced', 'skilled', 'qualified', 'smart', 'bright', 'young',
+  'the', 'a', 'an', 'our'
+]);
+const LEVEL_WORDS =
+  /^(?:junior|jr|senior|sr|mid|mid-level|midlevel|intermediate|entry|entry-level|lead|staff|principal|head|fresh|fresher|freshers|graduate|trainee)$/i;
+const NOUN_PLAIN_RE = new RegExp('^' + NOUN.replace('|devops', '') + '$', 'i');
+
+// "Paid Intern", "Motivated Interns", "Junior Developer": a level/noun with no
+// field word. These lose to any role that names a field.
+function isGenericRole(title) {
+  const words = String(title).toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^\p{L}\p{N}+#.-]/gu, ''))
+    .filter(Boolean);
+  return !words.some(w =>
+    !LEVEL_WORDS.test(w) && !FILLER_WORDS.has(w) && !NOUN_PLAIN_RE.test(w)
+  );
+}
+
 function finalizeTitle(s) {
   let t = s.replace(/\s+/g, ' ').trim().replace(/^[\s:–—|/&+-]+|[\s:–—|/&+-]+$/g, '');
   let prev;
@@ -248,41 +250,42 @@ function finalizeTitle(s) {
     prev = t;
     t = t.replace(TRAILING_JUNK, '').trim();
   } while (t !== prev);
-  return titleCaseIfNeeded(singularizeRoleNouns(t));
+  const words = t.split(' ');
+  while (words.length > 1 && FILLER_WORDS.has(words[0].toLowerCase())) words.shift();
+  return titleCaseIfNeeded(singularizeRoleNouns(words.join(' ')));
 }
 
 // All role phrases in a string, keeping only a contiguous "list"
-// ("Backend Developer, Frontend Developer and QA Engineer").
-/**
- * **Summary:** Extracts a contiguous list of plausible role phrases while excluding requirement and responsibility wording.
- * **Inputs:** `str` is a post line or hiring sentence that may name one or more roles.
- * **Returns:** The plausible role-title phrases in their original order.
- */
+// ("Backend Developer (Django), Frontend Developer and QA Engineer").
+// Returns [{ title, context }]; context = "(...)" right after the phrase.
 function extractPhraseList(str) {
+  str = String(str);
   const found = [];
-  for (const m of String(str).matchAll(PHRASE_RE)) {
+  for (const m of str.matchAll(PHRASE_RE)) {
     let words = `${m[1]}${m[2]}`.trim().split(/\s+/);
     while (words.length > 1 && STOP.has(bare(words[0]))) words.shift();
     if (words.length > 6) words = words.slice(-6);
     if (words.some(w => REJECT.has(bare(w)))) continue;
-    found.push({ t: words.join(' '), start: m.index, end: m.index + m[0].length });
+    const end = m.index + m[0].length;
+    const paren = str.slice(end).match(/^\s*[(\[]([^)\]]*)[)\]]/);
+    found.push({
+      title: words.join(' '),
+      context: paren ? paren[1] : '',
+      start: m.index,
+      end: end + (paren ? paren[0].length : 0)
+    });
   }
   if (!found.length) return [];
   const list = [found[0]];
   for (let i = 1; i < found.length; i++) {
     const gap = str.slice(found[i - 1].end, found[i].start);
-    if (/^\s*(?:[,;/&]|\band\b|\bor\b)?\s*$/i.test(gap)) list.push(found[i]);
+    if (/^[\s,;/&]*(?:\b(?:and|or)\b[\s,;/&]*)*$/i.test(gap)) list.push(found[i]);
     else break;
   }
-  return list.map(x => x.t);
+  return list.map(({ title, context }) => ({ title, context }));
 }
 
 // Value of a "Position: ..." style line -> [{title, context}]
-/**
- * **Summary:** Parses the value of a labelled role line into cleaned titles and preserves parenthetical context for resume matching.
- * **Inputs:** `value` is the text after a role label; `strong` allows unlabeled role wording from highly reliable labels.
- * **Returns:** The accepted role candidates with their contextual qualifiers.
- */
 function parseRoleValue(value, strong) {
   let v = String(value).replace(/#[\p{L}\p{N}_]+/gu, ' ');
   const context = [];
@@ -295,7 +298,9 @@ function parseRoleValue(value, strong) {
 
   let titles = [];
   if (v.split(' ').length > 10) {
-    titles = extractPhraseList(v);                   // it's a sentence
+    return extractPhraseList(v)                      // it's a sentence
+      .map(x => ({ title: finalizeTitle(x.title), context: x.context }))
+      .filter(c => c.title.length >= 3);
   } else {
     const parts = v.split(/\s*(?:[,;]|\s\/\s|\s&\s|\s+(?:and|or)\s+)\s*/i).filter(Boolean);
     const multi = parts.length > 1 && parts.every(p => NOUN_RE.test(p));
@@ -325,11 +330,6 @@ const STRONG_LABEL =
   '(?:job\\s+|open\\s+)?(?:position(?:\\s+title)?|role|job\\s*title|vacancy|designation|opening|hiring\\s+for)';
 const WEAK_LABEL =
   "(?:title|post|hiring|looking\\s+for|required|wanted|we(?:'|’)re\\s+hiring|now\\s+hiring)";
-/**
- * **Summary:** Builds a matcher for a family of labelled role lines and captures the label's value.
- * **Inputs:** `label` is the regular-expression source for accepted labels.
- * **Returns:** A case-insensitive expression that captures the role text.
- */
 const labelRe = label =>
   new RegExp(`(?:^|[|•]\\s*)${label}\\s*(?:[:：]|\\s[-–—]\\s)\\s*([^|•]+)`, 'i');
 const STRONG_RE = labelRe(STRONG_LABEL);
@@ -339,6 +339,7 @@ const HIRING_SENTENCES = [
   /\b(?:we(?:'|’)re|we\s+are|is|are|now|currently|urgently|immediately)\s+(?:hiring|recruiting|seeking|looking\s+for|in\s+need\s+of)\s+(.+)$/i,
   /\b(?:vacancy|vacancies|opening|openings|opportunity|opportunities)\s+(?:for|:)\s*(.+)$/i,
   /\b(?:hiring|recruiting|required|wanted|needed)\s*[:：]\s*(.+)$/i,
+  /^(?:urgently\s+)?(?:required|wanted|needed)\s+(.+)$/i,
   /\bjoin\s+(?:us|our\s+team)\s+as\s+(.+)$/i,
   /\blooking\s+for\s+(.+)$/i,
   /\b(?:seeking|hiring)\s+(.+)$/i
@@ -347,31 +348,36 @@ const HIRING_SENTENCES = [
 const NON_TITLE_LINE =
   /^(?:location|company|apply|salary|deadline|email|e-mail|subject|job\s*type|experience|send|contact|how\s+to\s+apply|requirements?|responsibilit|skills?|about|benefits?|what|who|why|qualification|note|dm|share|follow|like|repost|you(?:'|’)ll)\b/i;
 
-/**
- * **Summary:** Finds job roles using caller overrides first, then labelled lines, hiring sentences, and finally cautious top-of-post inference.
- * **Inputs:** No parameters; normalized request data and post lines are searched.
- * **Returns:** Deduplicated role candidates with the extraction source and confidence.
- */
+// Words that mean a bullet is describing duties/perks, not a job title.
+const BLOCK_REJECT = new Set([
+  'from', 'with', 'by', 'to', 'your', 'our', 'their', 'you', 'we', 'us', 'this',
+  'that', 'be', 'will', 'is', 'are', 'have', 'has', 'get', 'gain', 'learn',
+  'build', 'develop', 'work', 'working', 'mentorship', 'mentoring', 'guidance',
+  'support', 'team', 'experience', 'degree', 'knowledge', 'understanding',
+  'ability', 'strong', 'good', 'basic'
+]);
+
 function searchRoles() {
-  /**
-   * **Summary:** Deduplicates role candidates by title and limits multi-role output to a manageable review set.
-   * **Inputs:** `list` contains role candidates in preference order.
-   * **Returns:** Up to five unique role candidates.
-   */
   const uniq = list => {
     const seen = new Set();
     return list.filter(c => {
       const k = c.title.toLowerCase();
-      if (seen.has(k)) return false;
+      if (!k || seen.has(k)) return false;
       seen.add(k);
       return true;
-    }).slice(0, 5);
+    }).slice(0, 6);
+  };
+
+  // Every source adds a tier; the first tier that has a SPECIFIC role wins.
+  const tiers = [];
+  const add = (source, confidence, found) => {
+    const candidates = uniq(found);
+    if (candidates.length) tiers.push({ source, confidence, candidates });
   };
 
   // A. caller override
   if (typeof b.role === 'string' && b.role.trim()) {
-    const c = uniq(parseRoleValue(b.role, true));
-    if (c.length) return { candidates: c, source: 'provided', confidence: 'high' };
+    add('provided', 'high', parseRoleValue(b.role, true));
   }
 
   // B. labelled lines (Position:, Role:, Job Title:, ...)
@@ -384,60 +390,102 @@ function searchRoles() {
     m = s.match(WEAK_RE);
     if (m) weakHits.push(...parseRoleValue(m[1], false));
   }
-  if (strongHits.length) {
-    return { candidates: uniq(strongHits), source: 'labelled line', confidence: 'high' };
+  add('labelled line', 'high', strongHits);
+  add('labelled line (weak label)', 'medium', weakHits);
+
+  // B2. list under "...the following positions:"
+  const listHits = [];
+  const LIST_HEADING =
+    /\b(?:positions?|roles?|openings?|vacanc(?:y|ies)|job\s+titles?)\b[^.!?]*[:：]\s*$/i;
+  const NOT_ROLE_LIST = /responsibilit|requirement|skills?|benefits?|perks|qualif|duties/i;
+  for (let i = 0; i < lines.length; i++) {
+    if (!LIST_HEADING.test(lines[i]) || NOT_ROLE_LIST.test(lines[i]) || isBullet(lines[i])) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const item = lines[j];
+      const looksLikeItem =
+        isListItem(item) ||
+        (NOUN_RE.test(item) && item.split(' ').length <= 8 && !/[.!?]$/.test(item));
+      if (!looksLikeItem || /[:：]\s*$/.test(item)) break;
+      listHits.push(...parseRoleValue(stripLead(item), false));
+    }
+    if (listHits.length) break;
   }
-  if (weakHits.length) {
-    return { candidates: uniq(weakHits), source: 'labelled line (weak label)', confidence: 'medium' };
+  add('bullet list', 'high', listHits);
+
+  // B3. emoji/dash/numbered lines that look like job titles (no heading needed)
+  const blockHits = [];
+  for (const line of lines) {
+    if (!isListItem(line)) continue;
+    const item = stripLead(line);
+    if (!item || item.split(' ').length > 7 || /[:：]/.test(item) || /[.!?]$/.test(item)) continue;
+    if (!NOUN_RE.test(item)) continue;
+    for (const c of parseRoleValue(item, false)) {
+      if (c.title.split(' ').some(w => BLOCK_REJECT.has(bare(w)))) continue;
+      blockHits.push(c);
+    }
   }
+  add('role lines', 'medium', blockHits);
 
   // C. "We are hiring X", "Looking for X", "Vacancy for X"
+  const sentHits = [];
   const head = lines.filter(l => !isHashtagOnly(l) && !isBullet(l)).slice(0, 15);
   for (const line of head) {
     for (const re of HIRING_SENTENCES) {
       const m = stripLead(line).match(re);
       if (!m) continue;
-      const found = extractPhraseList(m[1]).map(t => ({ title: finalizeTitle(t), context: '' }));
-      if (found.length) {
-        return { candidates: uniq(found), source: 'hiring sentence', confidence: 'medium' };
-      }
-      break;
+      const found = extractPhraseList(m[1]).map(x => ({ title: finalizeTitle(x.title), context: x.context }));
+      if (found.length) { sentHits.push(...found); break; }
     }
   }
+  add('hiring sentence', 'medium', sentHits);
 
   // D. role phrase in the first short lines
+  const topHits = [];
   const top = lines
     .filter(l => !isHashtagOnly(l) && !isBullet(l) && l.length < 120 && !NON_TITLE_LINE.test(stripLead(l)))
     .slice(0, 8);
   for (const line of top) {
-    const found = extractPhraseList(line)
-      .filter(t => t.split(/\s+/).length >= 2)
-      .map(t => ({ title: finalizeTitle(t), context: '' }));
-    if (found.length) {
-      return { candidates: uniq(found), source: 'top-of-post phrase', confidence: 'low' };
+    topHits.push(
+      ...extractPhraseList(line)
+        .filter(x => x.title.split(/\s+/).length >= 2)
+        .map(x => ({ title: finalizeTitle(x.title), context: x.context }))
+    );
+  }
+  add('top-of-post phrase', 'low', topHits);
+
+  // E. hashtags: #FlutterDeveloper -> "Flutter Developer"
+  const tagHits = [];
+  for (const tag of normalizedText.match(/#[\p{L}\p{N}_]+/gu) || []) {
+    const spaced = tag.slice(1)
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+    for (const x of extractPhraseList(spaced)) {
+      tagHits.push({ title: finalizeTitle(x.title), context: '' });
     }
   }
+  add('hashtag', 'low', tagHits);
 
+  // Pick: first tier with at least one specific (non-generic) role.
+  for (const tier of tiers) {
+    const specific = tier.candidates.filter(c => !isGenericRole(c.title));
+    if (specific.length) return { ...tier, candidates: specific };
+  }
+  // Only generic roles exist ("Paid Intern"): better than nothing.
+  if (tiers.length) return tiers[0];
   return { candidates: [], source: null, confidence: null };
 }
 
-const roleSearch = searchRoles();
-const roleCandidateObjects = roleSearch.candidates;
-const roleCandidates = roleCandidateObjects.map(c => c.title);
-const primaryRole = roleCandidateObjects[0] || null;
-const role = primaryRole ? primaryRole.title : null;
-const roleContext = primaryRole ? primaryRole.context : '';
+let roleSearch;
+try {
+  roleSearch = searchRoles();
+} catch (error) {
+  roleSearch = { candidates: [], source: null, confidence: null, error: String(error && error.message || error) };
+}
 
-const isInternship = !!role && /\bintern(?:ship)?\b/i.test(role);
 
 // -------------------- Company --------------------
 // Only from explicit text. The email domain is returned as a HINT only.
 
-/**
- * **Summary:** Cleans an explicitly extracted company name without treating legal suffixes or post punctuation as identity.
- * **Inputs:** `value` is company text from a request override or matched post line.
- * **Returns:** The normalized company name.
- */
 function cleanCompany(value) {
   return String(value || '')
     .normalize('NFKC')
@@ -460,7 +508,9 @@ if (!company) {
   const companyPatterns = [
     [/^(?:company|organi[sz]ation|employer|hiring\s+company|client)\s*(?:name)?\s*[:：]\s*(.+)$/i, true],
     [/^(.{2,100}?)\s+(?:is|are)\s+(?:now\s+)?(?:hiring|seeking|looking\s+for|recruiting|expanding)\b/i, false],
-    [/^(.{2,100}?)\s*[-–—|:]\s*(?:we(?:'|’)re\s+|we\s+are\s+|now\s+)?hiring\b/i, false]
+    [/^(.{2,100}?)\s*[-–—|:]\s*(?:we(?:'|’)re\s+|we\s+are\s+|now\s+)?hiring\b/i, false],
+    [/\b(?:we(?:'|’)re|we\s+are|now|currently)\s+hiring\s+(?:at|for|with)\s+(.{2,60})$/i, false],
+    [/\bhiring\s+at\s+(.{2,60})$/i, false]
   ];
 
   outer:
@@ -525,11 +575,6 @@ const CITIES = [
   'london', 'toronto', 'berlin'
 ];
 
-/**
- * **Summary:** Removes work-mode qualifiers and trailing punctuation from an extracted location.
- * **Inputs:** `s` is location text from a labelled post line.
- * **Returns:** The cleaned location name.
- */
 const cleanLocation = s =>
   s
     .replace(/\s*\((?:on[ -]?site|remote|hybrid)\)/ig, '')
@@ -565,18 +610,8 @@ if (!location) {
 }
 
 const MODE_RE = /\bon[ -]?site\b|\bin[ -]office\b|\bremote\b|\bwork from home\b|\bwfh\b|\bhybrid\b/ig;
-/**
- * **Summary:** Maps varied work-mode wording to the parser's standard on-site, remote, or hybrid values.
- * **Inputs:** `raw` is a matched work-arrangement phrase.
- * **Returns:** The standardized work mode.
- */
 const toMode = raw =>
   /hybrid/i.test(raw) ? 'hybrid' : /remote|home|wfh/i.test(raw) ? 'remote' : 'on-site';
-/**
- * **Summary:** Finds the distinct work arrangements mentioned in a section of job-post text.
- * **Inputs:** `str` is the text to inspect for work-mode language.
- * **Returns:** The unique standardized work modes found.
- */
 const modesIn = str => [...new Set((str.match(MODE_RE) || []).map(toMode))];
 
 const modeLabelLines = lines.filter(l =>
@@ -626,11 +661,6 @@ const skills = Object.entries(skillPatterns)
 // -------------------- Resume catalogue --------------------
 // One entry per PDF in your resumes folder.
 
-/**
- * **Summary:** Creates a resume-catalog record with its stable category, file location, skills, and applicant summary.
- * **Inputs:** `id` identifies the category; `fileName` locates the resume; `skillList` and `summary` describe its fit.
- * **Returns:** The normalized resume-catalog entry.
- */
 const mkResume = (id, fileName, skillList, summary) => ({
   id,
   category: id,
@@ -666,11 +696,6 @@ const CATEGORY_ORDER = resumeCatalog.map(r => r.category);
 // -------------------- Resume scoring --------------------
 // score = best TITLE signal (0-10) + BODY signals (sum, capped at 8)
 
-/**
- * **Summary:** Defines one weighted role or technology signal used to score resume suitability.
- * **Inputs:** `k` names the signal; `re` recognizes it; `w` is its score contribution.
- * **Returns:** The normalized scoring-signal record.
- */
 const sig = (k, re, w) => ({ k, re, w });
 
 const TITLE_SIGNALS = {
@@ -772,24 +797,19 @@ const BODY_SIGNALS = {
   ]
 };
 
-// Roles none of your resumes fit. We refuse to guess a resume for these.
-const UNSUPPORTED_RE =
-  /\bjava\b|\bphp\b|\blaravel\b|\bwordpress\b|\bgolang\b|\bgo\s+(?:developer|engineer|lang)\b|\bruby\b|\brails\b|\brust\b|\bscala\b|c\+\+|\bembedded\b|\bsap\b|\bsalesforce\b|\bqa\b|\bsqa\b|quality assurance|\btester\b|\bsdet\b|\bui[\s/]*ux\b|\bgraphic\b|\bseo\b|\bmarketing\b|\bsales\b|\baccount(?:ant|s)?\b|\bhr\b|\brecruit/i;
+// Clearly non-technical roles: none of your resumes fit, so no resume.
+const NONTECH_RE =
+  /\bmarketing\b|\bsales\b|\baccount(?:ant|s|ing)?\b|\bhr\b|human resources?|\brecruit\w*\b|\bgraphic\b|\bui[\s/]*ux\b|\bux\b|\bdesigner\b|\bcontent\b|\bwriter\b|\bseo\b|\bsocial media\b|customer (?:support|service)|\bcivil\b|\bmechanical\b|\belectrical\b|\bfinance\b|business development|\bvideo editor\b|\bbilling\b/i;
+// Stacks you have no resume for: closest resume is used, with a warning.
+const UNSUPPORTED_STACK_RE =
+  /\bjava\b|\bphp\b|\blaravel\b|\bwordpress\b|\bgolang\b|\bgo\s+(?:developer|engineer|lang)\b|\bruby\b|\brails\b|\brust\b|\bscala\b|c\+\+|\bembedded\b|\bsap\b|\bsalesforce\b|\bqa\b|\bsqa\b|quality assurance|\btester\b|\bsdet\b/i;
+const SOFTWAREISH_RE =
+  /\b(?:developer|programmer|software|engineer|engineering|coder|sde|sdet|web|tech(?:nical)?|it|devops|qa|sqa|application|app|full[\s-]?stack|back[\s-]?end|front[\s-]?end)\b/i;
 
-/**
- * **Summary:** Removes generic AI-marketing modifiers that should not make a non-AI job select the AI resume.
- * **Inputs:** `s` is the candidate role title.
- * **Returns:** The title with non-specialist AI modifiers removed.
- */
 const neutralizeAiModifiers = s =>
   s.replace(/\bai[\s-]*(?:first|powered|driven|enabled|native|assisted|augmented|based)\b/gi, ' ');
 
-/**
- * **Summary:** Selects the strongest resume for a role using title and post signals while refusing weak or unsupported matches.
- * **Inputs:** `titleText` combines the extracted role and its relevant context.
- * **Returns:** The selected resume category, confidence, reason, scores, runner-up, and review notes.
- */
-function pickResume(titleText) {
+function pickResume(titleText, requireTitleSignal = false) {
   // Caller override wins.
   if (typeof b.resumeCategory === 'string') {
     const forced = resumeCatalog.find(r => r.category === b.resumeCategory.trim().toLowerCase());
@@ -836,30 +856,45 @@ function pickResume(titleText) {
   const margin = scores[top] - scores[second];
   const notes = [];
 
-  const unsupported = title.match(UNSUPPORTED_RE);
-  if (unsupported && bestTitleScore < 10) {
-    return {
-      category: null,
-      resume: null,
-      confidence: null,
-      reason: `Role looks outside your resumes ("${unsupported[0]}"); choose manually.`,
-      scores,
-      runnerUp: null,
-      notes
-    };
-  }
-  if (unsupported) notes.push(`Title also mentions "${unsupported[0]}", which none of your resumes cover.`);
+  const nonTech = title.match(NONTECH_RE);
+  const stackGap = title.match(UNSUPPORTED_STACK_RE);
+  const softwareish = SOFTWAREISH_RE.test(title);
+  const genericTitle = title.trim() !== '' && isGenericRole(title);
 
-  if (scores[top] < 4) {
+  const none = reason => ({
+    category: null, resume: null, confidence: null, reason, scores, runnerUp: null, notes
+  });
+  const fallbackPick = why => {
+    const fb = CONFIG.fallbackResumeCategory &&
+      resumeCatalog.find(r => r.category === CONFIG.fallbackResumeCategory);
+    if (!fb) return none(why);
     return {
-      category: null,
-      resume: null,
-      confidence: null,
-      reason: 'No clear tech signals in the role or post; choose manually.',
+      category: fb.category,
+      resume: fb,
+      confidence: 'low',
+      fallback: true,
+      reason: `Fallback resume: ${why}`,
       scores,
       runnerUp: null,
-      notes
+      notes: [...notes, `Fallback resume used (${why}); check it fits.`]
     };
+  };
+
+  if (nonTech && bestTitleScore < 10) {
+    return none(`Role looks non-technical ("${nonTech[0]}"); none of your resumes fit.`);
+  }
+  if (stackGap) {
+    notes.push(`No resume for "${stackGap[0]}"; closest resume used.`);
+  }
+
+  const titleOk = !requireTitleSignal || bestTitleScore >= 4;
+  if (scores[top] < 4 || !titleOk) {
+    if (softwareish || genericTitle) {
+      return fallbackPick(
+        softwareish ? 'software role with no specific stack named' : 'generic role title with no stack named'
+      );
+    }
+    return none('No tech signal in the role title or post; none of your resumes fit.');
   }
 
   const confidence =
@@ -891,11 +926,6 @@ function pickResume(titleText) {
 
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 
-/**
- * **Summary:** Converts numeric date parts into a verified calendar date for stable application identity generation.
- * **Inputs:** `year`, `month`, and `day` are the candidate date components.
- * **Returns:** The ISO date, or `null` when the components do not form a real date.
- */
 function toIsoDate(year, month, day) {
   const y = Number(year), m = Number(month), d = Number(day);
   if (!y || !m || !d) return null;
@@ -905,11 +935,6 @@ function toIsoDate(year, month, day) {
     : null;
 }
 
-/**
- * **Summary:** Recognizes supported numeric and named-month deadline formats that include an unambiguous year.
- * **Inputs:** `str` is a deadline line or nearby post text.
- * **Returns:** The parsed ISO date, or `null` when no supported valid date is present.
- */
 function parseDate(str) {
   let m;
   if ((m = str.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/))) {
@@ -930,17 +955,7 @@ function parseDate(str) {
 const DEADLINE_LABEL =
   /deadline|closing date|last date|apply (?:by|before|till|until)|closes? (?:on|by)|applications? close|due date|submit (?:by|before)/i;
 
-/**
- * **Summary:** Builds a reviewable, stable application identity from the role, destination, location, company, and hiring deadline.
- * **Inputs:** The input object supplies role, location, emails, company, deadline text, and form destinations.
- * **Returns:** The application ID and base key, parsed deadline, identity method, and any ambiguity warnings.
- */
 function makeApplicationIdentity({ role, location, emails = [], company, deadlineText = '', formLinks = [] }) {
-  /**
-   * **Summary:** Canonicalizes identity fields so harmless wording differences do not create duplicate application records.
-   * **Inputs:** `value` is a role, location, or company identity component.
-   * **Returns:** The normalized identity text.
-   */
   const normalize = value =>
     String(value || '')
       .normalize('NFKC')
@@ -991,11 +1006,6 @@ function makeApplicationIdentity({ role, location, emails = [], company, deadlin
   let method;
   let destination;
 
-  /**
-   * **Summary:** Selects the single application form as the identity destination and removes non-identity tracking parameters.
-   * **Inputs:** No parameters; the enclosing identity request supplies one form link.
-   * **Returns:** No value; the identity method and destination are set to the canonical form.
-   */
   const useForm = () => {
     method = 'form';
     destination = String(formLinks[0]).trim().split('#')[0];
@@ -1046,11 +1056,6 @@ function makeApplicationIdentity({ role, location, emails = [], company, deadlin
   };
 }
 
-/**
- * **Summary:** Builds an application identity for one role using the post's selected destination, location, company, and deadline.
- * **Inputs:** `roleTitle` is the role whose application identity should be generated.
- * **Returns:** The role-specific application identity and review warnings.
- */
 const identityFor = roleTitle =>
   makeApplicationIdentity({
     role: roleTitle,
@@ -1061,9 +1066,79 @@ const identityFor = roleTitle =>
     formLinks: formCandidates
   });
 
-// -------------------- Resume + identity for the primary role --------------------
+// -------------------- Role ranking (level first, then role type) --------------------
 
-const resumePick = role ? pickResume(`${role} ${roleContext}`) : {
+const LEVEL_RANK = { junior: 0, intern: 1, mid: 2, senior: 3 };
+
+function detectLevel(titleText) {
+  const found = [];
+  if (/\b(?:junior|jr\.?|entry[\s-]?level|fresh(?:er|ers)?|fresh\s+graduates?|graduate)\b/i.test(titleText)) found.push('junior');
+  if (/\b(?:intern|interns|internship|trainee)\b/i.test(titleText)) found.push('intern');
+  if (/\b(?:mid[\s-]?level|mid|intermediate)\b/i.test(titleText)) found.push('mid');
+  if (/\b(?:senior|sr\.?|lead|staff|principal|head|architect|manager)\b/i.test(titleText)) found.push('senior');
+  if (!found.length) return { level: 'unspecified', rank: LEVEL_RANK[CONFIG.unspecifiedLevel] ?? 2 };
+  // "Junior/Mid" -> the lower (more favourable) level wins
+  const best = found.sort((a, z) => LEVEL_RANK[a] - LEVEL_RANK[z])[0];
+  return { level: best, rank: LEVEL_RANK[best] };
+}
+
+// No role found at all, but the post names skills? Infer one from them.
+const INFERRED_TITLES = {
+  fullstack: 'Full Stack Developer', ai: 'AI Engineer', python: 'Python Developer',
+  mobile: 'Mobile App Developer', devops: 'DevOps Engineer', dotnet: '.NET Developer'
+};
+if (!roleSearch.candidates.length) {
+  const inferred = pickResume('', false);
+  if (inferred.category) {
+    roleSearch.candidates = [{ title: INFERRED_TITLES[inferred.category], context: '', inferred: true }];
+    roleSearch.source = 'inferred from skills in post';
+    roleSearch.confidence = 'low';
+  }
+}
+
+const multiRole = roleSearch.candidates.length > 1;
+
+const rankedRoles = roleSearch.candidates
+  .map((c, index) => {
+    const text2 = `${c.title} ${c.context}`;
+    const pick = c.inferred ? pickResume('', false) : pickResume(text2, multiRole);
+    const lvl = detectLevel(text2);
+    const catRank = pick.category ? CONFIG.categoryPriority.indexOf(pick.category) : 99;
+    return {
+      ...c,
+      index,
+      pick,
+      level: lvl.level,
+      levelRank: lvl.rank,
+      categoryRank: catRank < 0 ? 98 : catRank,
+      eligible: !!pick.category
+    };
+  })
+  .sort((a, z) =>
+    Number(z.eligible) - Number(a.eligible) ||
+    Number(!!a.pick.fallback) - Number(!!z.pick.fallback) ||   // real match beats fallback
+    a.levelRank - z.levelRank ||
+    a.categoryRank - z.categoryRank ||
+    a.index - z.index
+  );
+
+const primaryRole = rankedRoles[0] || null;
+const role = primaryRole ? primaryRole.title : null;
+const roleContext = primaryRole ? primaryRole.context : '';
+const roleLevel = primaryRole ? primaryRole.level : null;
+const roleCandidates = rankedRoles.map(c => c.title);
+const isInternship = !!role && /\bintern(?:ship)?\b/i.test(role);
+
+const roleSelectionReason = multiRole && primaryRole
+  ? `Chose "${role}" (level: ${primaryRole.level}, resume: ${primaryRole.pick.category || 'none'}). ` +
+    'Order: real resume match, then level junior/entry > intern > mid > senior, then fullstack > ai > python > devops > mobile > dotnet. ' +
+    `Skipped: ${rankedRoles.slice(1).map(c =>
+      `${c.title} [${c.level}${c.eligible ? ', ' + c.pick.category : ', no matching resume'}]`).join('; ')}`
+  : null;
+
+// -------------------- Resume + identity for the chosen role --------------------
+
+const resumePick = primaryRole ? primaryRole.pick : {
   category: null, resume: null, confidence: null, reason: 'No role detected.', scores: {}, runnerUp: null, notes: []
 };
 
@@ -1075,19 +1150,18 @@ const selectedResume = resumePick.resume
 
 const identity = identityFor(role);
 
-// Multi-role posts: one option per role, each with its own resume + ID.
-const roleOptions = roleCandidateObjects.length > 1
-  ? roleCandidateObjects.map(c => {
-      const pick = pickResume(`${c.title} ${c.context}`);
-      const id = identityFor(c.title);
-      return {
-        role: c.title,
-        resumeCategory: pick.category,
-        resumeFile: pick.resume ? pick.resume.fileName : null,
-        resumeConfidence: pick.confidence,
-        applicationId: id.applicationId
-      };
-    })
+// Multi-role posts: every role with its own level, resume and ID.
+const roleOptions = multiRole
+  ? rankedRoles.map((c, i) => ({
+      rank: i + 1,
+      role: c.title,
+      level: c.level,
+      resumeCategory: c.pick.category,
+      resumeFile: c.pick.resume ? c.pick.resume.fileName : null,
+      resumeConfidence: c.pick.confidence,
+      applicationId: identityFor(c.title).applicationId,
+      chosen: i === 0
+    }))
   : null;
 
 // -------------------- Email draft --------------------
@@ -1096,21 +1170,11 @@ const overlappingSkills = skills
   .filter(skill => (selectedResume?.skills || []).includes(skill))
   .slice(0, 6);
 
-/**
- * **Summary:** Formats a short list of skills as natural language for the application email draft.
- * **Inputs:** `items` contains the selected skill names.
- * **Returns:** A comma- and conjunction-separated list.
- */
 const formatList = items =>
   items.length <= 2
     ? items.join(' and ')
     : `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 
-/**
- * **Summary:** Extracts an employer-provided application email subject and resolves supported name and role placeholders.
- * **Inputs:** `roleTitle` is the selected role used to replace role placeholders.
- * **Returns:** The valid requested subject, or `null` when none is provided or placeholders remain unresolved.
- */
 function findSubject(roleTitle) {
   for (const line of lines) {
     const m = line.match(/\bsubject(?:\s*line)?\s*[:：]\s*["“']?(.+?)["”']?\s*$/i);
@@ -1127,11 +1191,6 @@ function findSubject(roleTitle) {
   return null;
 }
 
-/**
- * **Summary:** Drafts a concise application email grounded in the selected role, company, resume, overlapping skills, and applicant profile.
- * **Inputs:** No parameters; the selected extraction and resume context is used.
- * **Returns:** The complete review-required email body.
- */
 function buildEmailBody() {
   const skillsLine = overlappingSkills.length
     ? `My experience with ${formatList(overlappingSkills)} aligns closely with the requirements of this role.`
@@ -1189,12 +1248,16 @@ const route =
 
 const reviewReasons = [];
 
+if (roleSearch.error) {
+  reviewReasons.push(`Role search failed internally (${roleSearch.error}).`);
+}
+
 if (!role) {
   reviewReasons.push('No role title detected; set "role" in the request or fix manually.');
 } else {
   if (roleCandidates.length > 1) {
     reviewReasons.push(
-      `Multiple roles detected (${roleCandidates.join('; ')}); first one used. See roleOptions.`
+      `Multiple roles detected; ${roleSelectionReason}`
     );
   }
   if (roleSearch.confidence === 'low') {
@@ -1258,8 +1321,8 @@ return [
   {
     json: {
       ok,
-      status: ok ? 'review_required' : 'needs_manual_review',
-      parserVersion: '0.4.0',
+      status: ok && selectedResume ? 'review_required' : 'needs_manual_review',
+      parserVersion: '0.6.0',
 
       ...identity,
 
@@ -1272,6 +1335,8 @@ return [
       roleSource: roleSearch.source,
       roleConfidence: roleSearch.confidence,
       roleOptions,
+      roleLevel,
+      roleSelectionReason,
       isInternship,
       experience,
       entryLevel,
