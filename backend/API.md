@@ -4,7 +4,7 @@ The NestJS backend is the only endpoint the browser extension calls. It binds to
 
 ## Configuration
 
-Copy `.env.example` to `.env` for direct local development. Important variables:
+Copy `.env.example` to `.env` for direct local development and Compose. Compose loads `backend/.env` through its backend `env_file` declaration. Important variables:
 
 - `DATABASE_PATH`: durable SQLite file. Compose stores it in the `backend_data` volume.
 - `N8N_WEBHOOK_URL`: existing n8n production or test webhook. The backend preserves its `{text, url, links, capturedAt}` contract.
@@ -136,7 +136,7 @@ Each answer includes its original question ID, validated value, confidence, and 
 
 Salary questions require an identifiable seniority, currency, and `monthly` or `annual` period. The engine uses only the exact matching profile amount, or records an explicit ×12/÷12 deterministic derivation. It never performs an exchange-rate conversion. Unknown salary values stay unresolved and Gemini is instructed not to invent them.
 
-Gemini-generated reusable answers are atomically appended to `generatedSuggestions` with `approved: false`. To reuse one, review it in `data/profile.json`, move it to `approvedReusableAnswers`, and set `approved` to `true`. Generated answers never overwrite `verified` fields.
+Accepted medium/high-confidence Gemini answers are atomically appended to `generatedSuggestions` with `approved: true` and reused before another model call when their question type and compatibility rules match. Model-marked reusable answers may cross compatible jobs; non-reusable answers are restricted to the exact job fingerprint. Low-confidence, malformed, or ungrounded answers are not persisted. Generated answers never overwrite `verified` fields. Salary, availability dates, identity, and other factual values remain grounded in verified profile fields and deterministic rules rather than model invention.
 
 The profile engine uses:
 

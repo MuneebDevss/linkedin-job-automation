@@ -26,6 +26,9 @@ export interface VerifiedProfile {
   flexible_working_hours?: boolean;
   willing_to_learn?: boolean;
   salary_negotiable?: boolean;
+  currentSalary?: Record<string, SalaryBand>;
+  reasonForLeaving?: string | null;
+  'Reason for Leaving/Switching'?: string | null;
   salaryExpectations: Record<Seniority, Record<string, SalaryBand>>;
   automationConsents?: {
     automaticSubmission: boolean;
@@ -43,6 +46,7 @@ export interface ReusableAnswer {
   approved: boolean;
   fieldKey?: string;
   compatibility?: {
+    jobFingerprints?: string[];
     roles?: string[];
     seniorities?: Seniority[];
     currencies?: string[];

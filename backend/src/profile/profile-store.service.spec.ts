@@ -1,5 +1,5 @@
 import {ConfigService} from '@nestjs/config';
-import {mkdtemp, readdir, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {ProfileStoreService} from './profile-store.service';
@@ -33,5 +33,30 @@ describe('ProfileStoreService', () => {
     expect(after.approvedReusableAnswers).toEqual([]);
     expect(after.generatedSuggestions).toEqual([expect.objectContaining({id: 'suggestion-1', approved: false})]);
     expect((await readdir(directory)).some(file => file.endsWith('.tmp'))).toBe(false);
+  });
+
+  it('adds only missing verified template fields to an existing durable profile', async () => {
+    const templatePath = resolve('data/profile.json');
+    const existing = JSON.parse(await readFile(templatePath, 'utf8'));
+    delete existing.verified.currentSalary;
+    delete existing.verified.reasonForLeaving;
+    existing.verified.name = 'Existing Name Must Win';
+    existing.generatedSuggestions = [{
+      id: 'existing', question: 'Existing?', normalizedQuestion: 'existing', fieldType: 'text', answer: 'Yes',
+      confidence: 'high', approved: true, provenance: {source: 'gemini'},
+      createdAt: '2026-10-30T00:00:00.000Z', updatedAt: '2026-10-30T00:00:00.000Z'
+    }];
+    const target = join(directory, 'profile.json');
+    await writeFile(target, JSON.stringify(existing), 'utf8');
+    const service = new ProfileStoreService(new ConfigService({profilePath: target, profileTemplatePath: templatePath}) as never);
+
+    await service.onModuleInit();
+    const merged = await service.load();
+
+    expect(merged.verified).toMatchObject({
+      name: 'Existing Name Must Win', currentSalary: {PKR: {monthly: 0, annual: 0}},
+      reasonForLeaving: 'Seeking new opportunities for growth and learning.'
+    });
+    expect(merged.generatedSuggestions).toEqual([expect.objectContaining({id: 'existing'})]);
   });
 });

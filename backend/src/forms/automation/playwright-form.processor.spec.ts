@@ -156,6 +156,38 @@ describe('PlaywrightFormProcessor with safe local mock forms', () => {
     });
   });
 
+  it('recognizes and attaches a resume when the file input is hidden behind an upload button', async () => {
+    await serve(`<!doctype html><form>
+      <div data-question data-required="true"><span data-question-label>Please upload your recent resume. *</span>
+        <button type="button" aria-label="Add file">Add file</button></div>
+      <button type="button" data-form-action="submit">Submit</button>
+      <script>
+        const question = document.querySelector('[data-question]');
+        question.querySelector('button').addEventListener('click', () => {
+          let input = question.querySelector('input[type="file"]');
+          if (!input) {
+            input = document.createElement('input'); input.type = 'file'; input.required = true; question.appendChild(input);
+          }
+          input.click();
+        });
+        document.querySelector('[data-form-action="submit"]').addEventListener('click', () => {
+          const name = question.querySelector('input[type="file"]').files?.[0]?.name;
+          document.body.innerHTML = name === 'resume.pdf'
+            ? '<div data-submission-success>Your response has been recorded.</div>'
+            : '<div role="alert">Resume was not attached.</div>';
+        });
+      </script></form>`);
+
+    const result = await processor.process({
+      jobId: 'hidden-upload-mock', applicationId: 'safe-app', formUrls: [`${origin}/form`], text: 'Mobile developer role'
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.details).toMatchObject({
+      attachments: [{fileName: 'resume.pdf', kind: 'resume', verified: true}]
+    });
+  });
+
   it('requests reauthentication when a saved session is expired', async () => {
     await authenticationStates.save({
       cookies: [{

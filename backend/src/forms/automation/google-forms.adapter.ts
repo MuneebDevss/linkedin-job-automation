@@ -12,6 +12,7 @@ import {FormPlatformAdapter} from './form-platform-adapter.interface';
 interface InspectedControl {
   label: string;
   kind: ExtractedFormQuestion['controlKind'];
+  interactive: boolean;
   required: boolean;
   options: string[];
   placeholder?: string;
@@ -66,7 +67,7 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
     const questions: ExtractedFormQuestion[] = [];
     for (let index = 0; index < count; index += 1) {
       const inspected = await this.inspectControl(containers.nth(index));
-      if (!inspected.label && inspected.kind === 'unsupported') continue;
+      if (!inspected.interactive) continue;
       const label = inspected.label || `Unsupported field ${index + 1}`;
       const id = `gform-p${pageIndex}-q${index}-${createHash('sha1').update(label).digest('hex').slice(0, 8)}`;
       questions.push({
@@ -324,8 +325,13 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
        */
       const query = (selector: string) => element.querySelector(selector);
       const input = controls.find(node => node.tagName === 'INPUT') as HTMLInputElement | undefined;
+      const uploadButton = [...element.querySelectorAll('button, [role="button"]')]
+        .filter(visible)
+        .find(node => /\b(?:add file|upload|browse|choose file|select files?)\b/i.test(
+          `${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`
+        ));
       let kind: InspectedControl['kind'] = 'unsupported';
-      if (query('input[type="file"]')) kind = 'file';
+      if (query('input[type="file"]') || uploadButton) kind = 'file';
       else if (query('textarea')) kind = 'long_text';
       else if (query('input[type="radio"], [role="radio"]')) kind = 'radio';
       else if (query('input[type="checkbox"], [role="checkbox"]')) kind = 'checkbox';
@@ -356,7 +362,10 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
         ...((query('input[type="file"]') as HTMLInputElement | null)?.accept
           ? {accept: (query('input[type="file"]') as HTMLInputElement).accept} : {})
       };
-      return {label, kind, required, options, placeholder: input?.placeholder || undefined, constraints};
+      return {
+        label, kind, interactive: controls.length > 0 || Boolean(uploadButton) || Boolean(query('input[type="file"]')), required, options,
+        placeholder: input?.placeholder || undefined, constraints
+      };
     });
   }
 
@@ -430,7 +439,7 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
       return;
     }
     const openPicker = container.getByRole('button', {name: /upload|add file|browse|choose file/i}).first();
-    if (await openPicker.isVisible().catch(() => false)) await openPicker.click();
+    if (await openPicker.isVisible().catch(() => false) && await this.setFileFromButton(page, openPicker, path)) return;
     const deadline = Date.now() + this.config.get('formNavigationTimeoutMs', {infer: true});
     while (Date.now() < deadline) {
       for (const frame of page.frames()) {
@@ -439,10 +448,26 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
           await input.setInputFiles(path);
           return;
         }
+        const browse = frame.getByRole('button', {name: /select files? from (?:your )?device|browse|choose file/i}).first();
+        if (await browse.isVisible().catch(() => false) && await this.setFileFromButton(page, browse, path)) return;
       }
       await page.waitForTimeout(200);
     }
     throw new Error('The file picker did not expose an upload control.');
+  }
+
+  /**
+   * **Summary:** Clicks an upload control while listening for the native chooser that Google exposes only during the click.
+   * **Inputs:** `page` receives chooser events; `button` opens the picker; `path` is the approved document.
+   * **Returns:** `true` when a chooser accepted the file, otherwise `false` so embedded-picker discovery can continue.
+   */
+  private async setFileFromButton(page: Page, button: Locator, path: string): Promise<boolean> {
+    const chooser = page.waitForEvent('filechooser', {timeout: 2000}).catch(() => null);
+    await button.click();
+    const event = await chooser;
+    if (!event) return false;
+    await event.setFiles(path);
+    return true;
   }
 
   /**
@@ -461,7 +486,12 @@ export class GoogleFormsAdapter implements FormPlatformAdapter {
       const value = await container.locator('[role="listbox"]').first().innerText().catch(() => '');
       return Boolean(value.trim() && !/^(?:choose|select)(?: an? option)?$/i.test(value.trim()));
     }
-    if (kind === 'file') return (await container.locator('input[type="file"]').first().evaluate(node => (node as HTMLInputElement).files?.length || 0)) > 0;
+    if (kind === 'file') {
+      const input = container.locator('input[type="file"]').first();
+      if (await input.count() && (await input.evaluate(node => (node as HTMLInputElement).files?.length || 0)) > 0) return true;
+      const text = await container.innerText().catch(() => '');
+      return /\.[a-z0-9]{2,8}\b/i.test(text);
+    }
     if (kind === 'long_text') return Boolean((await container.locator('textarea').first().inputValue()).trim());
     if (kind === 'unsupported') return false;
     return Boolean((await container.locator('input:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]):not([type="file"])').first().inputValue()).trim());

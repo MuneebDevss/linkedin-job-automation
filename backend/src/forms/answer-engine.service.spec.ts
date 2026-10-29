@@ -16,6 +16,8 @@ function profile(): ProfileDocument {
       relocation: {willing: true, locations: []}, yearsOfExperience: 2, workAuthorization: null,
       willing_to_work_onsite: true, willing_to_relocate: true, willing_to_work_night_shifts: true,
       flexible_working_hours: true, willing_to_learn: true, salary_negotiable: true,
+      currentSalary: {PKR: {monthly: 0, annual: 0}},
+      reasonForLeaving: 'Seeking new opportunities for growth and learning.',
       strengths: ['Node.js', 'TypeScript'],
       salaryExpectations: {
         intern: {PKR: {monthly: null, annual: null}},
@@ -41,7 +43,11 @@ describe('AnswerEngineService', () => {
 
   beforeEach(() => {
     document = profile();
-    store = {load: jest.fn(async () => document), addGeneratedSuggestions: jest.fn()};
+    store = {
+      load: jest.fn(async () => document),
+      addGeneratedSuggestions: jest.fn(async (suggestions: ProfileDocument['generatedSuggestions']) =>
+        document.generatedSuggestions.push(...suggestions))
+    };
     gemini = {answer: jest.fn()};
     service = new AnswerEngineService(
       store as unknown as ProfileStoreService,
@@ -141,5 +147,63 @@ describe('AnswerEngineService', () => {
       }]
     });
     expect(result.answers[0]).toMatchObject({value: 'PKR 120k - 150k per month', provenance: {source: 'deterministic'}});
+  });
+
+  it('grounds current salary, expected salary, immediate dates, and switching reason in the profile', async () => {
+    document.verified.availability = {status: 'Immediate', date: null};
+    const today = new Date();
+    const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const result = await service.generate({
+      job: {title: 'Android Developer', description: 'Requires 1 to 2 years of experience'},
+      questions: [
+        {id: 'current', label: 'Current Salary?', type: 'text'},
+        {id: 'expected', label: 'Expected Salary?', type: 'text'},
+        {id: 'interview', label: 'Available date for interview', type: 'date'},
+        {id: 'joining', label: 'Date of Joining?', type: 'date'},
+        {id: 'switching', label: 'Reason of switching current job?', type: 'long_text'}
+      ]
+    });
+
+    expect(result.answers.map(answer => answer.value)).toEqual([
+      'PKR 0 per month', 'PKR 100000 per month', localToday, localToday,
+      'Seeking new opportunities for growth and learning.'
+    ]);
+    expect(gemini.answer).not.toHaveBeenCalled();
+  });
+
+  it('persists and reuses grounded reusable Gemini answers without a second model call', async () => {
+    gemini.answer.mockResolvedValue([{
+      questionId: 'motivation', answer: 'I enjoy building reliable products.', confidence: 'high', reusable: true,
+      provenance: {reason: 'Supported by the resume.', evidence: ['resume summary']}, model: 'gemini-test'
+    }]);
+    const input = {
+      job: {title: 'Product Engineer', description: 'Build reliable products'},
+      questions: [{id: 'motivation', label: 'What motivates you professionally?', type: 'long_text' as const}]
+    };
+
+    const generated = await service.generate(input);
+    const reused = await service.generate(input);
+
+    expect(generated.answers[0]).toMatchObject({value: 'I enjoy building reliable products.', provenance: {source: 'gemini'}});
+    expect(document.generatedSuggestions[0]).toMatchObject({approved: true, answer: 'I enjoy building reliable products.'});
+    expect(reused.answers[0]).toMatchObject({value: 'I enjoy building reliable products.', provenance: {source: 'approved_suggestion'}});
+    expect(gemini.answer).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists a non-reusable Gemini answer only for the exact same job', async () => {
+    gemini.answer.mockResolvedValue([{
+      questionId: 'motivation', answer: 'This role matches my TypeScript background.', confidence: 'high', reusable: false,
+      provenance: {reason: 'Specific to this role.', evidence: ['job description']}, model: 'gemini-test'
+    }]);
+    const question = [{id: 'motivation', label: 'Why this specific role?', type: 'long_text' as const}];
+    const job = {title: 'API Engineer', description: 'Build TypeScript APIs'};
+
+    await service.generate({job, questions: question});
+    const sameJob = await service.generate({job, questions: question});
+    await service.generate({job: {...job, description: 'Build Python data pipelines'}, questions: question});
+
+    expect(sameJob.answers[0]).toMatchObject({provenance: {source: 'approved_suggestion'}});
+    expect(document.generatedSuggestions[0].compatibility?.jobFingerprints).toHaveLength(1);
+    expect(gemini.answer).toHaveBeenCalledTimes(2);
   });
 });

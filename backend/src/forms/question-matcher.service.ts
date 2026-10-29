@@ -60,8 +60,14 @@ const DEFINITIONS: FieldDefinition[] = [
     patterns: [/(?:current )?employment status$/, /are you (?:currently )?employed/]
   },
   {
+    key: 'interviewAvailability', aliases: ['available date for interview', 'interview availability', 'interview date'],
+    patterns: [/(?:available|availability|date).*(?:interview)/, /interview.*(?:available|availability|date)/],
+    types: ['date', 'text']
+  },
+  {
     key: 'availability', aliases: ['availability', 'available to start', 'start date', 'earliest start date', 'joining date'],
-    patterns: [/(?:when|date).*(?:start|join|available)/, /(?:start|joining|availability) date$/]
+    patterns: [/(?:when|date).*(?:start|join|available)/, /(?:start|joining|availability) date$/,
+      /date of joining/, /available date/]
   },
   {
     key: 'relocation', aliases: ['relocation', 'willing to relocate', 'can you relocate', 'open to relocation'],
@@ -99,9 +105,19 @@ const DEFINITIONS: FieldDefinition[] = [
     patterns: [/(?:how many|number of|total)? ?years? of experience/, /professional experience/], types: ['number', 'text', 'select']
   },
   {
+    key: 'currentSalary', aliases: ['current salary', 'present salary', 'current compensation', 'current ctc'],
+    patterns: [/(?:current|present).*(?:salary|compensation|ctc|pay)/],
+    types: ['number', 'text', 'radio', 'select']
+  },
+  {
     key: 'salary', aliases: ['salary expectation', 'expected salary', 'desired salary', 'salary requirements', 'expected compensation', 'desired compensation', 'expected ctc'],
     patterns: [/(?:expected|desired|salary).*(?:salary|compensation|ctc|pay)/, /(?:salary|compensation) expectation/],
     types: ['number', 'text', 'radio', 'select']
+  },
+  {
+    key: 'reasonForLeaving', aliases: ['reason for leaving', 'reason for switching', 'reason of switching current job', 'why are you leaving'],
+    patterns: [/(?:reason|why).*(?:leav|switch|change).*(?:job|role|company)?/, /(?:leav|switch).*(?:reason)/],
+    types: ['text', 'long_text']
   },
   {
     key: 'strengths', aliases: ['strengths', 'key strengths', 'core strengths', 'skills', 'key skills'],

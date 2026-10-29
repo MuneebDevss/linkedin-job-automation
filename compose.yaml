@@ -2,11 +2,14 @@ services:
   backend:
     build:
       context: ./backend
+    env_file:
+      - ./backend/.env
     ports:
       - "127.0.0.1:3000:3000"
     environment:
       HOST: 0.0.0.0
       PORT: 3000
+      TZ: Asia/Karachi
       DATABASE_PATH: /app/data/jobs.sqlite
       N8N_WEBHOOK_URL: http://n8n:5678/webhook/linkedin-job
       N8N_TIMEOUT_MS: 20000
@@ -14,8 +17,6 @@ services:
       API_TOKEN: ${BACKEND_API_TOKEN:-}
       PROFILE_PATH: /app/data/profile.json
       PROFILE_TEMPLATE_PATH: /app/profile.default.json
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       GEMINI_TIMEOUT_MS: 30000
       FORM_AUTOMATION_ENABLED: "true"
       FORM_AUTO_SUBMIT: "true"
@@ -30,7 +31,9 @@ services:
       FORM_AUTH_STATE_PATH: /app/data/playwright/google-storage-state.json
       FORM_AUTH_LOGIN_URL: ${FORM_AUTH_LOGIN_URL:-https://accounts.google.com/}
       FORM_AUTH_LOGIN_TIMEOUT_MS: 300000
+      FORM_AUTH_CDP_URL: ""
       PLAYWRIGHT_HEADLESS: "true"
+      PLAYWRIGHT_BROWSER_EXECUTABLE_PATH: ""
     volumes:
       - backend_data:/app/data
       - ./backend/data/playwright:/app/data/playwright:Z

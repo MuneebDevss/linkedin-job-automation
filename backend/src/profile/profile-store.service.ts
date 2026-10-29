@@ -36,6 +36,7 @@ export class ProfileStoreService implements OnModuleInit {
       this.logger.log(`Initialized profile data at ${target}.`);
     }
     await this.load();
+    await this.mergeMissingVerifiedDefaults();
   }
 
   /**
@@ -49,8 +50,8 @@ export class ProfileStoreService implements OnModuleInit {
   }
 
   /**
-   * **Summary:** Adds new AI-generated reusable-answer suggestions without duplicating approved or previously generated records.
-   * **Inputs:** `suggestions` contains unapproved reusable answers produced from form questions.
+   * **Summary:** Adds new grounded AI-generated reusable answers without duplicating approved or previously generated records.
+   * **Inputs:** `suggestions` contains reusable answers produced from form questions under their compatibility boundaries.
    * **Returns:** A promise that resolves after unique suggestions are durably stored.
    */
   async addGeneratedSuggestions(suggestions: ReusableAnswer[]): Promise<void> {
@@ -78,6 +79,30 @@ export class ProfileStoreService implements OnModuleInit {
     const next = this.writeQueue.then(task, task);
     this.writeQueue = next.catch(() => undefined);
     await next;
+  }
+
+  /**
+   * **Summary:** Adds newly configured verified fields to an existing durable profile without replacing stored values or suggestions.
+   * **Inputs:** No parameters; the active profile and configured template profile are compared.
+   * **Returns:** A promise that resolves after missing top-level verified fields are merged, when needed.
+   */
+  private async mergeMissingVerifiedDefaults(): Promise<void> {
+    const target = this.config.get('profilePath', {infer: true});
+    const templatePath = this.config.get('profileTemplatePath', {infer: true});
+    if (target === templatePath) return;
+    const [profile, templateRaw] = await Promise.all([this.load(), readFile(templatePath, 'utf8')]);
+    const template = this.validate(JSON.parse(templateRaw));
+    const verified = profile.verified as unknown as Record<string, unknown>;
+    const defaults = template.verified as unknown as Record<string, unknown>;
+    let changed = false;
+    for (const [key, value] of Object.entries(defaults)) {
+      if (Object.prototype.hasOwnProperty.call(verified, key)) continue;
+      verified[key] = value;
+      changed = true;
+    }
+    if (!changed) return;
+    await this.writeAtomic(target, `${JSON.stringify(profile, null, 2)}\n`);
+    this.logger.log(`Added missing verified profile fields from ${templatePath}.`);
   }
 
   /**

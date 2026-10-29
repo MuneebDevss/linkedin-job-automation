@@ -17,6 +17,10 @@ describe('QuestionMatcherService', () => {
 
   it.each([
     ['Expected annual salary in USD', 'salary'],
+    ['Current Salary?', 'currentSalary'],
+    ['Available date for interview', 'interviewAvailability'],
+    ['Date of Joining?', 'availability'],
+    ['Reason of switching current job?', 'reasonForLeaving'],
     ['Are you willing to relocate?', 'relocation'],
     ['Earliest start date', 'availability'],
     ['LinkedIn profile URL', 'linkedin'],

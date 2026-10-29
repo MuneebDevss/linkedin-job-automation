@@ -148,16 +148,23 @@ export class GeminiService {
     if (!raw || !Array.isArray(raw.answers)) throw new Error('Gemini response is missing answers.');
     const allowed = new Set(questions.map(question => question.id));
     const seen = new Set<string>();
-    return raw.answers.map(item => {
-      const answer = item as Partial<GeminiAnswer> & {answer?: unknown};
-      if (!answer || typeof answer.questionId !== 'string' || !allowed.has(answer.questionId) || seen.has(answer.questionId) ||
-        !['high', 'medium', 'low'].includes(String(answer.confidence)) || typeof answer.reusable !== 'boolean' ||
-        !answer.provenance || typeof answer.provenance.reason !== 'string' || !Array.isArray(answer.provenance.evidence)) {
-        throw new Error('Gemini returned an invalid answer record.');
+    const answers: GeminiAnswer[] = [];
+    for (const item of raw.answers) {
+      try {
+        const answer = item as Partial<GeminiAnswer> & {answer?: unknown};
+        if (!answer || typeof answer.questionId !== 'string' || !allowed.has(answer.questionId) || seen.has(answer.questionId) ||
+          !['high', 'medium', 'low'].includes(String(answer.confidence)) || typeof answer.reusable !== 'boolean' ||
+          !answer.provenance || typeof answer.provenance.reason !== 'string' || !Array.isArray(answer.provenance.evidence)) {
+          throw new Error('invalid answer metadata');
+        }
+        const typed = this.typedValue(answer.answer);
+        seen.add(answer.questionId);
+        answers.push({...answer, answer: typed} as GeminiAnswer);
+      } catch (error) {
+        this.logger.warn(`Ignoring one invalid Gemini answer: ${error instanceof Error ? error.message : String(error)}`);
       }
-      seen.add(answer.questionId);
-      return {...answer, answer: this.typedValue(answer.answer)} as GeminiAnswer;
-    });
+    }
+    return answers;
   }
 
   /**

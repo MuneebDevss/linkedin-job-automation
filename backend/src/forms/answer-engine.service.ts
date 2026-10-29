@@ -93,7 +93,7 @@ export class AnswerEngineService {
           const accepted = generatedAnswer ? this.acceptGemini(item.question, item.match, generatedAnswer) : null;
           if (accepted) {
             answers.set(item.question.id, accepted);
-            if (generatedAnswer?.reusable && generatedAnswer.confidence !== 'low') {
+            if (generatedAnswer && generatedAnswer.confidence !== 'low') {
               suggestions.push(this.toSuggestion(item.question, item.match, generatedAnswer, input.job));
             }
           }
@@ -135,6 +135,8 @@ export class AnswerEngineService {
     profile: ProfileDocument, question: FormQuestion, match: QuestionMatch, job: JobAnswerContext
   ): Candidate | null {
     if (match.fieldKey === 'salary') return this.salaryCandidate(profile, question, job, false);
+    if (match.fieldKey === 'currentSalary') return this.currentSalaryCandidate(profile, question, job);
+    const asksForDate = question.type === 'date' || /\bdate\b/i.test(question.label);
     const values: Record<string, unknown> = {
       name: profile.verified.name,
       email: profile.verified.email,
@@ -154,9 +156,13 @@ export class AnswerEngineService {
       flexibleHours: profile.verified.flexible_working_hours,
       willingnessToLearn: profile.verified.willing_to_learn,
       salaryNegotiable: profile.verified.salary_negotiable,
-      availability: question.type === 'date'
+      availability: asksForDate
         ? profile.verified.availability.date
-        : profile.verified.availability.status || profile.verified.availability.date
+        : profile.verified.availability.status || profile.verified.availability.date,
+      interviewAvailability: asksForDate
+        ? profile.verified.availability.date
+        : profile.verified.availability.status || profile.verified.availability.date,
+      reasonForLeaving: profile.verified.reasonForLeaving || profile.verified['Reason for Leaving/Switching']
     };
     const value = this.adapt(question, values[match.fieldKey]);
     if (value === null) return null;
@@ -182,6 +188,11 @@ export class AnswerEngineService {
       detail = `Derived ${match.fieldKey} from the verified full name.`;
     } else if (match.fieldKey === 'salary') {
       return this.salaryCandidate(profile, question, job, true);
+    } else if ((match.fieldKey === 'availability' || match.fieldKey === 'interviewAvailability') &&
+      !profile.verified.availability.date && /^immediate(?:ly)?$/i.test(profile.verified.availability.status || '') &&
+      (question.type === 'date' || /\bdate\b/i.test(question.label))) {
+      raw = this.localDate();
+      detail = 'Derived the earliest available date as today from the verified immediate availability status.';
     } else if (match.fieldKey === 'strengths' && profile.verified.strengths.length) {
       raw = question.type === 'checkbox' ? profile.verified.strengths : profile.verified.strengths.join(', ');
       detail = 'Formatted verified strengths for the requested field type.';
@@ -200,10 +211,12 @@ export class AnswerEngineService {
   ): Candidate | null {
     const seniority = this.jobSeniority(job);
     const salaryText = this.salaryQuestionText(question);
-    const currency = (question.currency || this.detectCurrency(salaryText) || job.currency)?.toUpperCase();
-    const period = question.salaryPeriod || this.detectSalaryPeriod(salaryText);
-    if (!seniority || !currency || !period) return null;
-    const band = profile.verified.salaryExpectations[seniority]?.[currency];
+    if (!seniority) return null;
+    const bands = profile.verified.salaryExpectations[seniority];
+    const currency = (question.currency || this.detectCurrency(salaryText) || job.currency || this.onlyCurrency(bands))?.toUpperCase();
+    const period = question.salaryPeriod || this.detectSalaryPeriod(salaryText) || 'monthly';
+    if (!currency) return null;
+    const band = bands?.[currency];
     if (!band) return null;
     let amount = band[period];
     let source: AnswerSource = 'verified_profile';
@@ -239,6 +252,32 @@ export class AnswerEngineService {
   }
 
   /**
+   * **Summary:** Selects the verified current salary without asking Gemini to invent financial information.
+   * **Inputs:** `profile` supplies current compensation; `question` and `job` provide formatting context.
+   * **Returns:** A compatible verified salary answer, or `null` when current compensation is not configured.
+   */
+  private currentSalaryCandidate(
+    profile: ProfileDocument, question: FormQuestion, job: JobAnswerContext
+  ): Candidate | null {
+    const bands = profile.verified.currentSalary;
+    if (!bands) return null;
+    const salaryText = this.salaryQuestionText(question);
+    const currency = (question.currency || this.detectCurrency(salaryText) || job.currency || this.onlyCurrency(bands))?.toUpperCase();
+    const period = question.salaryPeriod || this.detectSalaryPeriod(salaryText) || 'monthly';
+    if (!currency) return null;
+    const amount = bands[currency]?.[period];
+    if (amount === null || amount === undefined) return null;
+    const raw = question.type === 'number' || question.type === 'radio' || question.type === 'select'
+      ? amount : `${currency} ${amount} per ${period === 'annual' ? 'year' : 'month'}`;
+    const value = this.adapt(question, raw);
+    return value === null ? null : {
+      value, source: 'verified_profile', confidence: 'high',
+      detail: `Used verified current ${currency} ${period} salary.`,
+      profileField: `currentSalary.${currency}.${period}`
+    };
+  }
+
+  /**
    * **Summary:** Finds the strongest approved reusable answer whose field and job-specific compatibility rules fit the current question.
    * **Inputs:** `profile` holds approved answers; `question` and `match` describe the field; `job` supplies compatibility context.
    * **Returns:** The reusable answer candidate, or `null` when none is suitable.
@@ -251,7 +290,7 @@ export class AnswerEngineService {
     const salaryText = this.salaryQuestionText(question);
     const currency = (question.currency || this.detectCurrency(salaryText) || job.currency)?.toUpperCase();
     const period = question.salaryPeriod || this.detectSalaryPeriod(salaryText);
-    const compatible = profile.approvedReusableAnswers
+    const compatible = [...profile.approvedReusableAnswers, ...profile.generatedSuggestions]
       .filter(item => item.approved && item.fieldType === question.type && item.confidence !== 'low')
       .filter(item => item.normalizedQuestion === normalized || Boolean(match && item.fieldKey === match.fieldKey))
       .filter(item => this.compatible(item, job, seniority, currency, period))
@@ -276,6 +315,7 @@ export class AnswerEngineService {
   ): boolean {
     const rules = item.compatibility;
     if (!rules) return true;
+    if (rules.jobFingerprints?.length && !rules.jobFingerprints.includes(this.jobFingerprint(job))) return false;
     if (rules.roles?.length && !rules.roles.some(role =>
       this.matcher.normalize(`${job.title || ''} ${job.description}`).includes(this.matcher.normalize(role)))) return false;
     if (rules.seniorities?.length && (!seniority || !rules.seniorities.includes(seniority))) return false;
@@ -411,25 +451,28 @@ export class AnswerEngineService {
   }
 
   /**
-   * **Summary:** Converts a reusable AI answer into an unapproved profile suggestion scoped to the job context where it was generated.
+   * **Summary:** Converts a grounded reusable AI answer into an automatically reusable profile entry scoped to its job context.
    * **Inputs:** `question` and `match` identify the field; `answer` contains the proposal; `job` supplies compatibility boundaries.
-   * **Returns:** A reusable-answer record awaiting explicit approval.
+   * **Returns:** An approved reusable-answer record with compatibility restrictions.
    */
   private toSuggestion(
     question: FormQuestion, match: QuestionMatch | null, answer: GeminiAnswer, job: JobAnswerContext
   ): ReusableAnswer {
     const now = new Date().toISOString();
     const normalizedQuestion = this.matcher.normalize(question.label);
-    const id = createHash('sha256').update(`${normalizedQuestion}|${JSON.stringify(answer.answer)}`).digest('hex');
+    const jobFingerprint = this.jobFingerprint(job);
+    const reuseScope = answer.reusable ? 'reusable' : jobFingerprint;
+    const id = createHash('sha256')
+      .update(`${normalizedQuestion}|${JSON.stringify(answer.answer)}|${reuseScope}`).digest('hex');
     const seniority = this.jobSeniority(job);
     const salaryText = this.salaryQuestionText(question);
     const currency = (question.currency || this.detectCurrency(salaryText) || job.currency)?.toUpperCase();
     const period = question.salaryPeriod || this.detectSalaryPeriod(salaryText);
     return {
       id, question: question.label, normalizedQuestion, fieldType: question.type, answer: answer.answer,
-      confidence: answer.confidence, approved: false, ...(match ? {fieldKey: match.fieldKey} : {}),
+      confidence: answer.confidence, approved: true, ...(match ? {fieldKey: match.fieldKey} : {}),
       compatibility: {
-        ...(job.title ? {roles: [job.title]} : {}),
+        ...(!answer.reusable ? {jobFingerprints: [jobFingerprint]} : {}),
         ...(seniority ? {seniorities: [seniority]} : {}),
         ...(currency ? {currencies: [currency]} : {}),
         ...(period ? {salaryPeriods: [period]} : {})
@@ -468,7 +511,42 @@ export class AnswerEngineService {
     if (/\b(?:lead|principal|staff|head)\b/i.test(value)) return 'lead';
     if (/\b(?:senior|sr\.?)\b/i.test(value)) return 'senior';
     if (/\b(?:mid|intermediate)\b/i.test(value)) return 'mid';
+    if (/\b(?:0|1|one)\s*(?:-|to)\s*(?:2|two|3|three)\s+years?\b/i.test(value) ||
+      /\b(?:up to|not more than)\s+(?:2|two|3|three)\s+years?\b/i.test(value)) return 'entry';
     return null;
+  }
+
+  /**
+   * **Summary:** Returns the sole configured currency when a form omits an otherwise unambiguous salary currency.
+   * **Inputs:** `bands` maps configured currency codes to verified salary amounts.
+   * **Returns:** The only currency code, or `undefined` when zero or multiple currencies are configured.
+   */
+  private onlyCurrency(bands: Record<string, unknown> | undefined): string | undefined {
+    const currencies = Object.keys(bands || {});
+    return currencies.length === 1 ? currencies[0] : undefined;
+  }
+
+  /**
+   * **Summary:** Produces a stable scope for AI answers that are valid only for the exact job context that generated them.
+   * **Inputs:** `job` contains the role title and description supplied to answer generation.
+   * **Returns:** A SHA-256 fingerprint used to prevent job-specific answer reuse across unrelated applications.
+   */
+  private jobFingerprint(job: JobAnswerContext): string {
+    const value = `${job.title || ''}|${job.description}`.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+    return createHash('sha256').update(value).digest('hex');
+  }
+
+  /**
+   * **Summary:** Formats today's local calendar date for immediate interview and joining availability.
+   * **Inputs:** No parameters; the backend's configured local timezone is used.
+   * **Returns:** Today's date in the ISO form field format `YYYY-MM-DD`.
+   */
+  private localDate(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   /**

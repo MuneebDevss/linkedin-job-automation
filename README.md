@@ -11,7 +11,7 @@ docker compose up -d --build
 
 The backend is available at `http://127.0.0.1:3000`, and n8n remains at `http://127.0.0.1:5678`. Both ports are published only on loopback. The `backend_data` and `n8n_data` volumes are durable; do not delete them unless you intend to remove their data.
 
-To require a shared local token, set `BACKEND_API_TOKEN` before starting Compose and enter the same value in the extension. Direct-development variables are documented in [backend/.env.example](backend/.env.example), and the complete API contract is in [backend/API.md](backend/API.md).
+Compose loads backend runtime settings, including Gemini credentials, from `backend/.env`. Create it from `backend/.env.example` and keep it private. To require a shared local token, set `BACKEND_API_TOKEN` before starting Compose and enter the same value in the extension. Direct-development variables are documented in [backend/.env.example](backend/.env.example), and the complete API contract is in [backend/API.md](backend/API.md).
 
 ## 2. Import the workflow
 In n8n create a workflow, use its menu → Import from File → choose workflow.json. Save it. Select the Receive post node and click Listen for test event (or Execute workflow). Use the Test URL shown by the node; it should be http://localhost:5678/webhook-test/linkedin-job. The test listener generally needs re-arming after each request.
@@ -40,7 +40,7 @@ The backend exposes `POST /api/forms/answers` for answer generation without brow
 
 Review [the local profile](backend/data/profile.json) before use. Existing supplied values are retained; unknown phone, CGPA, employment, availability, relocation, experience, work authorization, and salary amounts intentionally remain `null`. Fill only values you have verified. Salary entries are separated by seniority, currency, and monthly/annual period.
 
-Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in the environment before starting Compose. Gemini suggestions are saved separately as unapproved suggestions and are never allowed to overwrite verified fields. The [API documentation](backend/API.md) contains the schema and [sample request](backend/examples/form-answers.input.json) and [sample output](backend/examples/form-answers.output.json).
+Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in `backend/.env` before starting Compose. Accepted medium/high-confidence Gemini answers are saved in `generatedSuggestions` and reused before another model call. Answers Gemini marks reusable may cross compatible jobs; job-specific answers are restricted to the exact job fingerprint. They never overwrite verified fields. Dates, salary, identity, and other factual answers still require verified profile data or deterministic derivation. The [API documentation](backend/API.md) contains the schema and [sample request](backend/examples/form-answers.input.json) and [sample output](backend/examples/form-answers.output.json).
 
 Automatic submission requires both `FORM_AUTO_SUBMIT=true` and `verified.automationConsents.automaticSubmission=true`. Required legal declarations are never delegated to Gemini: add an exact normalized declaration label to `verified.automationConsents.legalDeclarations` only after you have explicitly chosen to accept it. CAPTCHA, authentication, inaccessible/closed forms, unsupported required controls, unresolved required facts, failed validation, and unconfirmed submissions stop with `needs_manual_action`.
 
