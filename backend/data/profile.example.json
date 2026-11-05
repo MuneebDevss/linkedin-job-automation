@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "verified": {
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "phone": "+1234567890",
+    "linkedin": "https://linkedin.com/in/example-profile",
+    "github": "https://github.com/example-user",
+    "location": "City, Country",
+    "university": "Example University Name",
+    "cgpa": "3.5/4.0",
+    "employmentStatus": "Unemployed",
+    "availability": {
+      "status": "Immediate",
+      "date": null
+    },
+    "Graduating Year": 2024,
+    "Year of Graduation": 2024,
+    "degree": "Bachelor of Science in Computer Science",
+    "willing_to_work_onsite": true,
+    "willing_to_relocate": true,
+    "willing_to_work_night_shifts": false,
+    "flexible_working_hours": true,
+    "willing_to_learn": true,
+    "salary_negotiable": true,
+    "relocation": {
+      "willing": true,
+      "locations": [
+        "City A",
+        "City B",
+        "Remote"
+      ]
+    },
+    "yearsOfExperience": "1-3 years",
+    "workAuthorization": "Authorized to work in Country",
+    "strengths": [
+      "Skill 1",
+      "Skill 2",
+      "Skill 3"
+    ],
+    "currentSalary": {
+      "USD": {
+        "monthly": 0,
+        "annual": 0
+      }
+    },
+    "reasonForLeaving": "Seeking new opportunities for growth and learning.",
+    "salaryExpectations": {
+      "intern": {
+        "USD": {
+          "monthly": 3000,
+          "annual": 36000
+        }
+      },
+      "entry": {
+        "USD": {
+          "monthly": 5000,
+          "annual": 60000
+        }
+      },
+      "mid": {
+        "USD": {
+          "monthly": 8000,
+          "annual": 96000
+        }
+      },
+      "senior": {
+        "USD": {
+          "monthly": 12000,
+          "annual": 144000
+        }
+      },
+      "lead": {
+        "USD": {
+          "monthly": 15000,
+          "annual": 180000
+        }
+      }
+    },
+    "automationConsents": {
+      "automaticSubmission": true,
+      "legalDeclarations": {}
+    }
+  },
+  "verification": {
+    "name": {
+      "source": "extract.js",
+      "status": "verified"
+    },
+    "email": {
+      "source": "extract.js",
+      "status": "verified"
+    },
+    "phone": {
+      "source": "user-provided",
+      "status": "verified"
+    },
+    "linkedin": {
+      "source": "extract.js",
+      "status": "verified"
+    },
+    "github": {
+      "source": "extract.js",
+      "status": "verified"
+    },
+    "location": {
+      "source": "user-provided LinkedIn profile",
+      "status": "verified"
+    },
+    "university": {
+      "source": "user-provided LinkedIn profile",
+      "status": "verified"
+    },
+    "strengths": {
+      "source": "existing resume catalog",
+      "status": "verified"
+    },
+    "willing_to_work_onsite": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    },
+    "willing_to_relocate": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    },
+    "willing_to_work_night_shifts": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    },
+    "flexible_working_hours": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    },
+    "willing_to_learn": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    },
+    "salary_negotiable": {
+      "source": "user-provided employment preference",
+      "status": "verified"
+    }
+  },
+  "approvedReusableAnswers": [],
+  "generatedSuggestions": [],
+  "documentCatalog": [],
+  "resumeCatalog": [
+    {
+      "id": "role_key",
+      "fileName": "Firstname_Lastname_Resume.pdf",
+      "path": "/files/resumes/Firstname_Lastname_Resume.pdf",
+      "skills": [
+        "Skill 1",
+        "Skill 2"
+      ],
+      "summary": "Brief summary of experience and key highlights relevant to this specialization."
+    }
+  ]
+}

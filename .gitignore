@@ -7,4 +7,4 @@ backend/node_modules/
 backend/dist/
 backend/coverage/
 backend/data/*
-!backend/data/profile.json
+!backend/data/profile.example.json
