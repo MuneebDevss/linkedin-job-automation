@@ -29,7 +29,12 @@ export interface AppConfiguration {
   formAuthCdpUrl: string;
   playwrightHeadless: boolean;
   playwrightBrowserExecutablePath: string;
-  googleSheetsSyncEnabled: boolean;
+  batchConcurrency: number;
+  emailWorkflowConcurrency: number;
+  formWorkflowConcurrency: number;
+  queuePollIntervalMs: number;
+  queueLeaseMs: number;
+  workflowRetryLimit: number;
   googleSheetsSpreadsheetId: string;
   googleSheetsTab: string;
   googleSheetsCredentialPath: string;
@@ -167,7 +172,12 @@ export default (): AppConfiguration => {
     formAuthCdpUrl: authenticationCdpUrl(),
     playwrightHeadless: boolean('PLAYWRIGHT_HEADLESS', true),
     playwrightBrowserExecutablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE_PATH || '',
-    googleSheetsSyncEnabled: boolean('GOOGLE_SHEETS_SYNC_ENABLED', false),
+    batchConcurrency: integer('BATCH_CONCURRENCY', 3),
+    emailWorkflowConcurrency: integer('EMAIL_WORKFLOW_CONCURRENCY', 3),
+    formWorkflowConcurrency: integer('FORM_WORKFLOW_CONCURRENCY', 1),
+    queuePollIntervalMs: integer('QUEUE_POLL_INTERVAL_MS', 1000),
+    queueLeaseMs: integer('QUEUE_LEASE_MS', 300000),
+    workflowRetryLimit: integer('WORKFLOW_RETRY_LIMIT', 3),
     googleSheetsSpreadsheetId,
     googleSheetsTab,
     googleSheetsCredentialPath: process.env.GOOGLE_SHEETS_CREDENTIALS_PATH

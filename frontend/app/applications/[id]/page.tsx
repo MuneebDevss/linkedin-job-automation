@@ -1,0 +1,42 @@
+'use client';
+
+import Link from 'next/link';
+import {useParams} from 'next/navigation';
+import {useQuery} from '@tanstack/react-query';
+import {ArrowLeft, ExternalLink, FileText, Paperclip} from 'lucide-react';
+import {queries} from '@/lib/api';
+import {formatDate} from '@/lib/utils';
+import {PageHeading} from '@/components/page-heading';
+import {Button} from '@/components/ui/button';
+import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
+import {StatusBadge} from '@/components/ui/badge';
+import {JsonView} from '@/components/ui/json-view';
+import {EmptyState, ErrorState, LoadingState} from '@/components/ui/states';
+import {Table, Td, Th} from '@/components/ui/table';
+
+export default function ApplicationDetailPage() {
+  const id = decodeURIComponent(String(useParams<{id: string}>().id));
+  const {data: app, isLoading, error} = useQuery({queryKey: ['application', id], queryFn: () => queries.application(id), refetchInterval: query => query.state.data?.workflows.some(workflow => ['pending','processing'].includes(workflow.status)) ? 2000 : false});
+  if (isLoading) return <LoadingState label="Loading application record…" />;
+  if (error || !app) return <ErrorState error={error} />;
+  return <>
+    <Link href="/applications" className="mb-4 inline-flex items-center gap-2 text-sm text-slate-500 hover:text-white"><ArrowLeft className="size-4" />Applications</Link>
+    <PageHeading eyebrow={app.company || 'Application'} title={app.role || 'Untitled opportunity'} description={`${app.location || 'Location unknown'} · created ${formatDate(app.createdAt)}`} action={<div className="flex gap-2">{app.workflows.map(workflow => <StatusBadge key={workflow.id} status={workflow.status} />)}</div>} />
+    <div className="grid gap-6 xl:grid-cols-[1fr_.8fr]">
+      <div className="space-y-6">
+        <Card><CardHeader><CardTitle>Job information</CardTitle><CardDescription>Captured post and normalized destinations</CardDescription></CardHeader><CardContent className="space-y-4"><dl className="grid gap-4 text-sm sm:grid-cols-2"><Info label="Company" value={app.company} /><Info label="Role" value={app.role} /><Info label="Location" value={app.location} /><Info label="Application method" value={app.applicationChannel} /><Info label="Selected resume" value={app.selectedResume} /><Info label="Application ID" value={app.id} mono /></dl><div><p className="mb-2 text-xs uppercase tracking-wider text-slate-500">Description</p><p className="max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">{app.jobDescription}</p></div><div className="flex flex-wrap gap-2">{app.linkedinPostUrl && <External href={app.linkedinPostUrl} label="LinkedIn source" />}{app.applicationUrl && <External href={app.applicationUrl} label="Application form" />}{app.formUrls.map(url => <External key={url} href={url} label="Detected form" />)}</div></CardContent></Card>
+        <Card><CardHeader><CardTitle>Form questions and answers</CardTitle><CardDescription>Latest normalized answer state and provenance</CardDescription></CardHeader><CardContent>{!app.formQuestions.length ? <EmptyState title="No form questions" description="No form was inspected for this application." /> : <Table><thead><tr><Th>Question</Th><Th>Answer</Th><Th>Source</Th><Th>Confidence</Th><Th>Validation</Th></tr></thead><tbody>{app.formQuestions.map(question => <tr key={question.questionId}><Td><p className="font-medium text-white">{question.label}</p><p className="text-xs text-slate-600">{question.fieldType} {question.required ? '· required' : ''}</p></Td><Td className="max-w-xs break-words">{question.answer === null ? '—' : Array.isArray(question.answer) ? question.answer.join(', ') : String(question.answer)}</Td><Td>{question.answerSource || '—'}</Td><Td>{question.confidence || '—'}</Td><Td>{question.errorMessage ? <span className="text-rose-300">{question.errorMessage}</span> : <span className="text-emerald-300">{question.outcome}</span>}</Td></tr>)}</tbody></Table>}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Submission evidence and artifacts</CardTitle></CardHeader><CardContent className="space-y-4">{!app.formSubmissionAttempts.length ? <EmptyState title="No form attempts" description="Submission evidence appears after form processing." /> : app.formSubmissionAttempts.map((attempt, index) => <div key={String(attempt.id || index)} className="rounded-xl border border-slate-800 p-4"><div className="flex items-center justify-between"><span className="font-medium text-white">Form attempt {String(attempt.attemptNumber || index + 1)}</span><StatusBadge status={String(attempt.outcome || 'pending')} /></div><p className="mt-2 text-xs text-slate-500">{formatDate(String(attempt.createdAt || ''))}</p>{Array.isArray(attempt.screenshots) && attempt.screenshots.length > 0 && <div className="mt-3 flex items-center gap-2 text-sm text-cyan-300"><Paperclip className="size-4" />{attempt.screenshots.map(path => <span key={String(path)} className="break-all">{String(path)}</span>)}</div>}<JsonView value={attempt} label="attempt JSON" /></div>)}</CardContent></Card>
+      </div>
+      <div className="space-y-6">
+        <Card><CardHeader><CardTitle>Workflow status</CardTitle></CardHeader><CardContent className="space-y-4">{app.workflows.map(workflow => <div key={workflow.id} className="rounded-xl border border-slate-800 p-4"><div className="flex items-center justify-between"><div><p className="font-medium capitalize text-white">{workflow.type} workflow</p><p className="mt-1 break-all font-mono text-[11px] text-slate-600">{workflow.id}</p></div><StatusBadge status={workflow.status} /></div><dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><Info label="Stage" value={workflow.stage} /><Info label="Attempts" value={String(workflow.attempts)} /><Info label="Updated" value={formatDate(workflow.updatedAt)} /><Info label="Outcome" value={workflow.outcome} /></dl>{workflow.error && <p className="mt-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300">{workflow.error}</p>}<JsonView value={{response: workflow.response, error: workflow.error}} label="workflow JSON" /></div>)}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Execution history</CardTitle><CardDescription>Immutable requests, responses, errors, and duration</CardDescription></CardHeader><CardContent className="space-y-3">{app.workflowAttempts.map(attempt => <div key={attempt.id} className="rounded-xl border border-slate-800 p-4"><div className="flex items-center justify-between"><span className="text-sm font-medium text-white">Attempt {attempt.attemptNumber}</span><StatusBadge status={attempt.status} /></div><p className="mt-2 text-xs text-slate-500">{formatDate(attempt.startedAt)} · {attempt.durationMs === null ? 'in progress' : `${attempt.durationMs} ms`}</p>{attempt.error && <p className="mt-2 text-sm text-rose-300">{attempt.error}</p>}<JsonView value={attempt} label="request / response" /></div>)}{!app.workflowAttempts.length && <p className="py-8 text-center text-sm text-slate-500">No workflow attempts recorded.</p>}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Processing timeline</CardTitle><CardDescription>Actual backend stages; no estimated percentages</CardDescription></CardHeader><CardContent className="space-y-4">{app.processingEvents.map(event => <div key={event.id} className="border-l border-slate-700 pl-4"><div className="flex items-center justify-between gap-2"><StatusBadge status={event.stage} /><span className="text-[11px] text-slate-600">{formatDate(event.createdAt)}</span></div><p className="mt-2 text-sm text-slate-400">{event.message || event.status}</p></div>)}</CardContent></Card>
+        <Card><CardContent className="pt-5"><JsonView value={app} label="complete application JSON" /></CardContent></Card>
+      </div>
+    </div>
+  </>;
+}
+
+function Info({label, value, mono}: {label: string; value?: string | null; mono?: boolean}) { return <div><dt className="text-[11px] uppercase tracking-wider text-slate-600">{label}</dt><dd className={`mt-1 break-words text-slate-300 ${mono ? 'font-mono text-xs' : ''}`}>{value || '—'}</dd></div>; }
+function External({href, label}: {href: string; label: string}) { return <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"><ExternalLink className="size-3.5" />{label}</a>; }

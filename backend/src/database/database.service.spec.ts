@@ -55,7 +55,37 @@ describe('DatabaseService application tracking', () => {
     expect(application?.formSubmissionAttempts).toEqual([
       expect.objectContaining({attemptNumber: 1, attempted: true, outcome: 'completed'})
     ]);
-    expect(application?.sheetsSync).toMatchObject({status: 'pending'});
+    expect(application?.sheetsSync).toBeNull();
+  });
+
+  it('migrates older dashboard queue columns before creating queue indexes', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'jobs-db-dashboard-migration-'));
+    const path = join(directory, 'legacy-dashboard.sqlite');
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE batches (
+        id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE batch_items (
+        id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, input_json TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    database = new DatabaseService(new ConfigService({databasePath: path}) as never);
+    database.onModuleInit();
+    const migrated = new DatabaseSync(path);
+    const columns = migrated.prepare('PRAGMA table_info(batch_items)').all() as Array<{name: string}>;
+    const batchColumns = migrated.prepare('PRAGMA table_info(batches)').all() as Array<{name: string}>;
+    migrated.close();
+
+    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'position', 'available_at', 'lease_expires_at', 'updated_at'
+    ]));
+    expect(batchColumns.map(column => column.name)).toContain('concurrency');
   });
 
   it('persists normalized answers, failures, evidence, and every form attempt transactionally', async () => {
@@ -116,6 +146,56 @@ describe('DatabaseService application tracking', () => {
     expect(application.formSubmissionAttempts[1]).toMatchObject({
       attemptNumber: 2, attempted: true, outcome: 'completed', evidence: {kind: 'confirmation_message'}
     });
-    expect(application.sheetsSync).toMatchObject({status: 'pending', attempts: 0});
+    expect(application.sheetsSync).toBeNull();
+  });
+
+  it('persists batches, claims work once, and recovers interrupted queue items', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'jobs-db-batch-'));
+    const path = join(directory, 'jobs.sqlite');
+    database = new DatabaseService(new ConfigService({databasePath: path}) as never);
+    database.onModuleInit();
+    const input = {text: 'Role', url: 'https://linkedin.test/post/3', links: [], capturedAt: '2026-01-01T00:00:00.000Z'};
+    const created = database.createBatch({
+      id: 'batch-1', idempotencyKey: 'same-request', concurrency: 2,
+      items: [
+        {id: 'batch-1:0', position: 0, input},
+        {id: 'batch-1:1', position: 1, input: {...input, text: 'Role 2'}}
+      ]
+    });
+    const duplicate = database.createBatch({
+      id: 'batch-2', idempotencyKey: 'same-request', concurrency: 2,
+      items: [{id: 'batch-2:0', position: 0, input}]
+    });
+
+    expect(created.created).toBe(true);
+    expect(duplicate).toMatchObject({created: false, batch: {id: 'batch-1', total: 2}});
+    expect(database.claimNextBatchItem('worker-a', 60_000)).toMatchObject({id: 'batch-1:0', status: 'processing'});
+
+    database.recoverInterruptedWork();
+    expect(database.getBatch('batch-1')).toMatchObject({queued: 2, processing: 0});
+  });
+
+  it('keeps immutable workflow attempt and processing event history', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'jobs-db-attempt-'));
+    const path = join(directory, 'jobs.sqlite');
+    database = new DatabaseService(new ConfigService({databasePath: path}) as never);
+    database.onModuleInit();
+    database.insertApplication({id: 'app-3', sourceUrl: null, contentHash: 'hash-3', method: 'email',
+      payload: {text: 'Role'}, emails: ['jobs@example.test'], forms: [], description: 'Role'});
+    database.insertWorkflow('email-3', 'app-3', 'email');
+    database.createBatch({id: 'batch-3', idempotencyKey: 'batch-3-key', concurrency: 1, items: []});
+    database.updateWorkflow('email-3', 'processing');
+    const attemptId = database.beginWorkflowAttempt('email-3', 'email-3:1', {text: 'Role'}, 'batch-3');
+    database.updateWorkflowStage('email-3', 'processing', 'Creating Gmail draft.', 'batch-3');
+    database.updateWorkflow('email-3', 'failed', undefined, 'temporary outage');
+    database.finishWorkflowAttempt(attemptId, 'failed', 'failed', undefined, 'temporary outage', true);
+
+    const application = database.getApplication('app-3')!;
+    expect(application.workflowAttempts).toEqual([
+      expect.objectContaining({attemptNumber: 1, status: 'failed', transient: true, error: 'temporary outage'})
+    ]);
+    expect(application.processingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({batchId: 'batch-3', message: 'Creating Gmail draft.'})
+    ]));
   });
 });

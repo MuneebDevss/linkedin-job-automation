@@ -23,8 +23,8 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'X-API-Key'],
-    origin: (origin, callback) =>
-      callback(null, !origin || /^(moz|chrome)-extension:\/\//.test(origin))
+    origin: (origin, callback) => callback(null, !origin || /^(moz|chrome)-extension:\/\//.test(origin) ||
+      /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(origin))
   });
   const host = config.get('host', {infer: true});
   const port = config.get('port', {infer: true});

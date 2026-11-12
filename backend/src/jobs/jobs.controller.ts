@@ -1,7 +1,10 @@
-import {Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards} from '@nestjs/common';
+import {Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards} from '@nestjs/common';
 import {ApiKeyGuard} from '../common/api-key.guard';
 import {ProcessJobDto} from './dto/process-job.dto';
 import {JobsService} from './jobs.service';
+import {
+  ApplicationListQueryDto, CreateBatchDto, EventsQueryDto, PageQueryDto, RetryWorkflowDto, WorkflowCallbackDto
+} from './dto/jobs-dashboard.dto';
 
 @Controller('api/jobs')
 @UseGuards(ApiKeyGuard)
@@ -24,6 +27,71 @@ export class JobsController {
     return this.jobs.process(input);
   }
 
+  @Post('batches')
+  @HttpCode(HttpStatus.ACCEPTED)
+  createBatch(@Body() input: CreateBatchDto) {
+    return this.jobs.createBatch(input);
+  }
+
+  @Get('dashboard')
+  dashboard() {
+    return this.jobs.dashboard();
+  }
+
+  @Get('health')
+  health() {
+    return this.jobs.health();
+  }
+
+  @Post('import/google-sheets')
+  @HttpCode(HttpStatus.OK)
+  importGoogleSheets() {
+    return this.jobs.importGoogleSheets();
+  }
+
+  @Get('applications')
+  applications(@Query() query: ApplicationListQueryDto) {
+    return this.jobs.listApplications(query);
+  }
+
+  @Get('batches')
+  batches(@Query() query: PageQueryDto) {
+    return this.jobs.listBatches(query);
+  }
+
+  @Get('batches/:batchId')
+  batch(@Param('batchId') batchId: string) {
+    return this.jobs.getBatch(batchId);
+  }
+
+  @Post('batches/:batchId/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+  retryBatch(@Param('batchId') batchId: string) {
+    return this.jobs.retryBatch(batchId);
+  }
+
+  @Get('failures')
+  failures() {
+    return this.jobs.failures();
+  }
+
+  @Get('events')
+  events(@Query() query: EventsQueryDto) {
+    return this.jobs.events(query);
+  }
+
+  @Post('workflows/:workflowId/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+  retryWorkflow(@Param('workflowId') workflowId: string, @Body() input: RetryWorkflowDto) {
+    return this.jobs.retryWorkflow(workflowId, input.idempotencyKey);
+  }
+
+  @Post('workflows/:workflowId/callback')
+  @HttpCode(HttpStatus.OK)
+  workflowCallback(@Param('workflowId') workflowId: string, @Body() input: WorkflowCallbackDto) {
+    return this.jobs.workflowCallback(workflowId, input);
+  }
+
   /**
    * **Summary:** Retrieves a previously processed application and the current state of its delivery workflows.
    * **Inputs:** `applicationId` is the stable identifier returned when the job was processed.
@@ -34,10 +102,4 @@ export class JobsController {
     return this.jobs.get(applicationId);
   }
 
-  /** Retries only Google Sheets synchronization; application workflows are never re-executed. */
-  @Post(':applicationId/sync')
-  @HttpCode(HttpStatus.OK)
-  sync(@Param('applicationId') applicationId: string) {
-    return this.jobs.retrySheetSync(applicationId);
-  }
 }

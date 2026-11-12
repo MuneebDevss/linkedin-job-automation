@@ -8,3 +8,5 @@ backend/dist/
 backend/coverage/
 backend/data/*
 !backend/data/profile.example.json
+frontend/node_modules/
+frontend/.next/

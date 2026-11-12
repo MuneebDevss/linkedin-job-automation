@@ -29,7 +29,7 @@ The project reduces the repetitive parts of applying to jobs discovered on Linke
 1. **Capture:** reliably collect the selected post text, post permalink, visible URLs, clickable destinations, and email links despite LinkedIn DOM changes.
 2. **Routing and idempotency:** normalize destinations, classify email and form channels, assign stable identifiers, persist state, and avoid repeat drafts or submissions.
 3. **Application assistance:** create a Gmail draft with a role-matched resume through n8n, or fill a supported Google Form with profile-grounded answers through Playwright.
-4. **Audit and tracking:** retain workflow outcomes, normalized answers and provenance, form attempts, confirmation evidence, failures, and optional Google Sheets synchronization.
+4. **Audit and tracking:** retain applications, batches, workflow attempts, normalized answers and provenance, processing events, confirmation evidence, failures, and safe retry decisions in SQLite.
 
 ### What is automated
 
@@ -38,10 +38,10 @@ The project reduces the repetitive parts of applying to jobs discovered on Linke
 - Canonicalizing URLs, removing common tracking parameters, resolving LinkedIn short links under an SSRF policy, and deduplicating destinations.
 - Detecting email addresses, including common `[at]` and `[dot]` obfuscation, and detecting likely application-form/ATS URLs.
 - Creating one durable application plus independent email and form workflow records.
-- Calling n8n for email applications. The imported workflow extracts role metadata, selects a resume, writes a tracker row, reads the resume file, and creates a **Gmail draft**.
+- Calling n8n for email applications. The imported workflow extracts role metadata, selects and reads a resume, and creates a **Gmail draft**; the result is recorded in SQLite.
 - Inspecting, answering, validating, navigating, attaching files to, and—when explicitly enabled—submitting one Google Forms application.
 - Reusing a saved Google/SSO browser session without storing the user's password.
-- Optionally reconciling backend-owned form columns into Google Sheets.
+- Persistently queueing bulk submissions with bounded email and browser concurrency and restart recovery.
 
 ### What remains manual
 
@@ -51,7 +51,7 @@ The project reduces the repetitive parts of applying to jobs discovered on Linke
 - Supplying and verifying profile facts, salary data, resume files, application documents, and legal-declaration consent.
 - Completing CAPTCHA, first-time/expired authentication, inaccessible forms, unsupported form controls, payments, fees, or any workflow that ends in `needs_manual_action`.
 - Investigating `submission_unknown`. The application may already have been submitted, so the system will not retry it automatically.
-- Configuring Gmail and Google Sheets credentials in n8n, and configuring a service account when backend-owned form synchronization is enabled.
+- Configuring Gmail credentials in n8n. Google Sheets credentials are needed only for an optional one-time legacy import.
 
 ## Current implementation status
 
@@ -62,13 +62,14 @@ The project reduces the repetitive parts of applying to jobs discovered on Linke
 | URL safety | Implemented | Canonicalization, tracking-parameter removal, LinkedIn redirect/short-link handling, DNS checks, redirect/body/time limits. |
 | Classification | Implemented, rule-based | Email and broad form/ATS recognition. Classification does not guarantee an automation adapter exists. |
 | Durable identity and deduplication | Implemented | LinkedIn activity ID, canonical permalink hash, or content hash; independent deterministic email/form workflow IDs. |
-| Email workflow | Implemented through n8n | Creates a Gmail draft with an attachment and updates the tracker; it never sends the draft. Live behavior depends on imported workflow credentials and file mounts. |
+| Email workflow | Implemented through n8n | Creates a Gmail draft with an attachment and reports the result to NestJS/SQLite; it never sends the draft. |
 | Google Forms automation | Implemented with safety gates | Text, long text, number, date, radio, checkbox, select, multi-page navigation, and file upload. |
 | Other form/ATS platforms | Classified but not automated | They are recorded as form workflows and return `needs_manual_action` with `unsupported_platform`. |
 | Profile answer engine | Implemented | Verified profile → approved memory → deterministic derivation → Gemini → unresolved. |
 | Persistent form authentication | Implemented | Playwright storage state; recommended Fedora flow captures a dedicated normal-Chrome session over loopback CDP. |
-| SQLite audit history | Implemented | Application, workflow, latest question/answer, immutable attempt, and Sheets-sync records with startup migrations. |
-| Backend Google Sheets sync | Implemented, opt-in | Uses a service account or short-lived access token and owns form-specific columns only. |
+| SQLite system of record | Implemented | Applications, independent workflows, latest answers, immutable attempts, batches, queue leases, stages, events, evidence, and retries. |
+| Legacy Google Sheets import | Optional, read-only | `POST /api/jobs/import/google-sheets` imports old rows once. New tracking never reads from or writes to Sheets. |
+| Next.js dashboard | Implemented | Dashboard, bulk submission, application details, batches, live event polling, retry center, and settings. |
 | Automated tests | Implemented | Unit/integration-style Jest tests and disposable loopback mock forms; no live Gmail, Sheets, Gemini, or real application submission tests. |
 | Extension distribution | Development-only | Firefox loading is temporary; Chromium uses unpacked developer mode. No signing/store packaging exists. |
 
@@ -84,13 +85,14 @@ flowchart LR
     E -->|POST /api/jobs/process| B[NestJS / Fastify backend]
 
     B --> URL[URL normalization and classification]
-    B --> ID[Identity and workflow coordinator]
+    B --> Q[Durable batch queue]
+    Q --> ID[Identity and workflow coordinator]
     ID <--> DB[(SQLite)]
+    D[Next.js dashboard] -->|NestJS API| B
 
     ID -->|email branch| N[n8n webhook]
     N -->|read selected PDF| R[(Read-only resume directory)]
     N --> G[Gmail draft]
-    N --> NS[Google Sheets email/shared columns]
 
     ID -->|form branch| P[Playwright processor]
     P --> A[Google Forms adapter]
@@ -101,8 +103,6 @@ flowchart LR
     P --> R
     P --> AS[(Saved browser auth state)]
 
-    ID -->|optional form outcome sync| BS[Google Sheets API]
-    BS --> NS
 ```
 
 ### Component responsibilities
@@ -110,20 +110,20 @@ flowchart LR
 | Component | Responsibility | Does not do |
 |---|---|---|
 | Browser extension | Associates a selection with one post, extracts text/permalink/links, lets the user edit the capture, stores backend URL/token locally, and sends one request. | It does not classify, resolve short URLs, call n8n directly, or submit applications. |
-| NestJS backend | Validates requests, normalizes and resolves URLs, classifies channels, creates durable identities, coordinates independent workflows, exposes status/auth/answer APIs, and synchronizes form outcomes. | It does not create or send Gmail messages itself. |
-| n8n workflow | Parses email-application metadata, selects a resume, checks the tracker by `Job Link`, creates a Gmail draft, and updates/removes its tracker row. | It does not send the email and does not run Playwright. |
+| NestJS backend | Validates requests, owns SQLite, runs the durable batch queue, coordinates independent workflows, computes retry eligibility, and exposes dashboard/status/auth/answer APIs. | It does not create or send Gmail messages itself. |
+| n8n workflow | Parses email-application metadata, selects a resume, creates a Gmail draft, and returns the draft outcome with the backend workflow/idempotency identity. | It does not track applications, send the email, or run Playwright. |
 | Playwright processor | Runs one isolated browser context per form job, applies network policy, uses the platform adapter, answers/fills/validates pages, attaches approved files, and verifies submission. | It does not bypass CAPTCHA or guess required facts. |
 | Google Forms adapter | Recognizes Google Forms, inspects controls, detects blockers, performs interactions, validates the page, and detects confirmation evidence. | It does not support Microsoft Forms, Typeform, Workday, or other classified destinations. |
 | Answer engine | Matches questions to verified fields, reuses compatible answers, derives deterministic values, selects a resume, and invokes Gemini only for unresolved questions. | It does not allow Gemini to invent sensitive facts or legal consent. |
-| SQLite | Stores the system of record for backend applications, workflows, form questions, attempts, and tracker synchronization. | It does not contain n8n's OAuth credentials, which stay in n8n's own volume. |
-| Google Sheets | Acts as a human-readable tracker. n8n owns email/shared workflow updates; the backend optionally owns form-specific columns. | It is not the backend's idempotency database. |
+| SQLite | Is the single source of truth for applications, batches, workflow/form attempts, queue leases, stages, events, answers, and evidence. | It does not contain n8n's OAuth credentials, which stay in n8n's own volume. |
+| Next.js frontend | Reads and mutates application state only through the protected NestJS API. | It never opens SQLite or receives Gemini/Gmail/browser credentials. |
 
 ### Trust and deployment boundaries
 
 - The extension accepts only `http://localhost` or `http://127.0.0.1` backend process URLs and only the `/api/jobs/process` path.
 - Direct development binds to `127.0.0.1` by default. Compose binds the container to `0.0.0.0` internally but publishes ports 3000 and 5678 only on host loopback.
 - n8n is an internal local destination from the backend's perspective; `N8N_WEBHOOK_URL` only accepts `localhost`, `127.0.0.1`, or the Compose hostname `n8n` over HTTP.
-- External form, Gemini, OAuth, and Sheets traffic leaves the machine. Browser requests to private, loopback, link-local, reserved, `.local`, and `.internal` destinations are blocked except for explicitly enabled test fixtures.
+- External form, Gemini, Gmail, and optional one-time Sheets-import traffic leaves the machine. Browser requests to private, loopback, link-local, reserved, `.local`, and `.internal` destinations are blocked except for explicitly enabled test fixtures.
 - The SQLite database, n8n volume, applicant profile, resume directory, browser storage state, and failure screenshots all contain sensitive application data and must be treated accordingly.
 
 ## End-to-end workflows
@@ -186,7 +186,7 @@ This means the backend's unit of identity is normally the LinkedIn post, not eac
 - email and form decisions are independent, so one branch can be reused while the other runs or fails;
 - the top-level `duplicate` is true only when every returned branch is both completed and reused.
 
-n8n performs a second, tracker-level duplicate check by the original LinkedIn `Job Link`. A 2xx n8n response with `status: skipped_duplicate` completes the backend email workflow with outcome `skipped_duplicate`. The backend records the n8n result but does not reinterpret its business status.
+SQLite's stable application/workflow keys are the sole duplicate boundary. n8n receives the backend workflow ID and idempotency key; it no longer queries a second tracker.
 
 ### 5. Email application through n8n
 
@@ -194,40 +194,30 @@ n8n performs a second, tracker-level duplicate check by the original LinkedIn `J
 sequenceDiagram
     participant B as Backend
     participant N as n8n webhook
-    participant S as Google Sheets
     participant F as Resume mount
     participant G as Gmail
 
-    B->>N: POST text, url, links, capturedAt
+    B->>N: POST capture + workflowId + idempotencyKey
     N->>N: Parse email, role, location, skills, resume
-    N->>S: Lookup row by Job Link
-    alt duplicate row exists
-        N-->>B: skipped_duplicate
-    else new row
-        N->>S: Append/update Status=Processing
-        N->>F: Read selected resume PDF
-        N->>G: Create draft with attachment
-        alt draft created
-            N->>S: Update Status=Draft created
-            N-->>B: workflow result
-        else Gmail failed
-            N->>S: Find and delete Processing row
-            N-->>B: gmail_failed result
-        end
+    N->>F: Read selected resume PDF
+    N->>G: Create draft with attachment
+    alt draft created
+        N-->>B: draft_created + draft ID
+    else Gmail failed
+        N-->>B: gmail_failed + structured error
     end
 ```
 
-The backend forwards the normalized four-field webhook contract unchanged. The current imported workflow:
+The backend forwards the normalized capture plus `workflowId` and `idempotencyKey`. The current imported workflow:
 
 - validates post text, extracts email/form candidates and job metadata, and chooses a resume from paths inside `/files/resumes`;
 - expects exactly one usable application recipient before it can construct `emailDraft` safely;
-- creates a tracker row with `Processing` status before Gmail work;
 - reads the selected resume file through n8n's file node;
 - calls Gmail's **draft** resource with the resume attached;
-- updates the row to `Draft created` on success;
-- uses Gmail's error output to remove the temporary processing row and return `gmail_failed` on failure.
+- returns `draft_created` with the Gmail draft ID on success;
+- returns `gmail_failed` with a structured error on failure.
 
-There is no automatic send node. Open Gmail, review recipient, subject, body, and attachment, then send manually. The n8n workflow contains credential references from its source environment; after import, map the Gmail and Google Sheets nodes to credentials owned by your n8n instance.
+There is no automatic send node. Open Gmail, review recipient, subject, body, and attachment, then send manually. After import, map the Gmail node to a credential owned by your n8n instance.
 
 ### 6. Google Form processing through Playwright
 
@@ -283,33 +273,21 @@ The recommended Google flow uses normal Chrome with a dedicated profile and loop
 
 Saved state reports `missing`, `available`, `expired`, or `invalid`. Local expiry checks cannot predict server-side revocation. If a protected form redirects back to sign-in, the form workflow records `reauthentication_required` inside a `needs_manual_action` result; refresh the saved session rather than retrying submission blindly.
 
-### 10. Submission confirmation, persistence, and Sheets synchronization
+### 10. Submission confirmation and SQLite persistence
 
 Before submission, validation and all required-field safety gates must pass. The `completed` form status means a confirmation message/container was observed—not merely that Submit was clicked. The audit details retain pages, questions, filled values/sources, issues, attachments, browser errors, screenshots, authentication metadata, and submission evidence.
 
-Form outcomes are transactionally written to SQLite: the workflow is updated, the latest question state is replaced, an immutable attempt row is inserted, application metadata is enriched, and Sheets sync is marked pending. Optional synchronization then:
-
-- adds missing form-tracking headers without removing existing columns;
-- matches `Application ID` first;
-- adopts exactly one legacy n8n row by original `Job Link` when no stable ID matches;
-- appends a new row when neither key matches;
-- owns `Application ID`, `Application URL`, `Form Status`, `Form Updated At`, `Submission Evidence`, `Form Resume`, and `Form Notes`;
-- fills shared company/role/link/channel/date/location cells only when blank, except it may upgrade channel `Email` to `Email + Form`;
-- preserves existing `Status`, `Notes`, manual values, and existing `Form Notes`;
-- stores sync attempts/errors durably and allows sync-only retry without rerunning Gmail or the form.
-
-If a sync remains `processing` for more than ten minutes, it may be reclaimed as stale. A sync requested during an active sync is remembered and returned to `pending` after the active attempt completes.
+Form outcomes are transactionally written to SQLite: the workflow is updated, the latest question state is replaced, an immutable form-attempt row is inserted, application metadata is enriched, and a terminal processing event is recorded. Generic workflow attempts retain request/response JSON, errors, timestamps, duration, transient classification, and idempotency key. Legacy `sheet_syncs` rows are preserved by migrations but are not created or updated for new applications.
 
 ### 11. Errors, retries, and manual intervention
 
 | Condition | Result | Automatic retry behavior |
 |---|---|---|
-| n8n timeout/non-2xx/network failure | email `failed` | Next identical capture atomically retries. |
+| n8n timeout/non-2xx/network failure | email `failed` | Eligible manual retry uses bounded backoff and an atomic claim. |
 | Playwright launch/navigation/infrastructure failure before submit | form `failed` | Retried inside the run up to `FORM_MAX_RETRIES`; a later identical capture may retry. |
 | CAPTCHA, auth, closed/access-denied form | form `needs_manual_action` | Later identical capture may retry only if submission never started. |
 | Ambiguous/unsupported URL, required unsupported field, missing fact/consent, failed validation | form `needs_manual_action` | Safe retry is allowed before submission; fix the underlying condition first. |
 | Submit clicked, no confirmation or browser failure | form `submission_unknown` | Never retried automatically. Verify externally. |
-| Sheets API/OAuth failure | Sheets sync `failed` | Duplicate capture or explicit sync endpoint retries only synchronization. |
 | Unknown application ID | HTTP 404 | Correct/use the stable ID. |
 
 ## Project structure
@@ -320,7 +298,8 @@ Generated dependencies, build output, browser profiles, databases, and artifacts
 .
 ├── README.md                         Primary onboarding and technical reference
 ├── compose.yaml                      Loopback-only backend + n8n deployment
-├── workflow.json                     Importable n8n Gmail-draft/tracker workflow
+├── workflow.json                     Importable n8n Gmail-draft workflow (no Sheets nodes)
+├── frontend/                         Next.js App Router dashboard
 ├── extract.js                        Newer standalone n8n parser; not auto-wired to workflow.json
 ├── extension/
 │   ├── manifest.json                 Manifest V3 permissions, action, LinkedIn content script
@@ -363,7 +342,7 @@ Generated dependencies, build output, browser profiles, databases, and artifacts
                 └── form-artifact.service.ts
 ```
 
-NestJS modules follow the same boundaries. `JobsModule` composes URL, classification, identity, n8n, forms, Sheets, and database services. `FormsModule` exports a `FORM_PROCESSOR` abstraction so the coordinator is not coupled to Playwright internals. Platform-specific browser behavior is behind `FormPlatformAdapter`; adding a platform means implementing that interface and registering the adapter, not adding platform branches to the job coordinator.
+NestJS modules follow the same boundaries. `JobsModule` composes URL, classification, identity, n8n, forms, the read-only legacy importer, and database services. `FormsModule` exports a `FORM_PROCESSOR` abstraction so the coordinator is not coupled to Playwright internals. Platform-specific browser behavior is behind `FormPlatformAdapter`; adding a platform means implementing that interface and registering the adapter, not adding platform branches to the job coordinator.
 
 `form-worker/` may exist in a working checkout as local/untracked material, but it is not part of the tracked application and is not referenced by the build, Compose, or runtime modules.
 
@@ -371,21 +350,21 @@ NestJS modules follow the same boundaries. `JobsModule` composes URL, classifica
 
 | Technology | Use in this project |
 |---|---|
-| TypeScript 5 / Node.js 22 | Backend implementation; Node's built-in `node:sqlite`, `fetch`, crypto, filesystem, DNS, and URL APIs. |
+| TypeScript 5 / Node.js 22 | Backend and frontend implementation; Node's built-in `node:sqlite`, `fetch`, crypto, filesystem, DNS, and URL APIs. |
 | NestJS 11 | Module composition, dependency injection, controllers, guards, validation pipes, and lifecycle hooks. |
 | Fastify 5 | HTTP adapter with a configured 1 MiB body limit. |
 | class-validator / class-transformer | DTO validation, trimming, nested conversion, whitelist enforcement. |
-| SQLite (WAL mode) | Durable local source of truth with foreign keys and transactional form audit writes. |
+| SQLite (WAL mode) | Single durable source of truth with foreign keys, queue leases, events, batches, attempts, and transactional form audit writes. |
 | Playwright 1.64 / Chromium | Isolated browser contexts, Google Form inspection/filling/upload/navigation, auth capture, screenshots. |
 | Gemini `generateContent` API | Structured fallback answers for unresolved, grounded questions only. |
-| n8n | Email parsing/orchestration, resume file loading, Gmail draft creation, and email-owned tracker updates. |
+| n8n | Email parsing/orchestration, resume file loading, and Gmail draft creation. |
 | Gmail node/API | Draft creation only; final review and sending remain manual. |
-| Google Sheets API / n8n Sheets node | Shared application tracker, with explicit column ownership between backend and n8n. |
+| Next.js / Tailwind / TanStack Query | Local dashboard, tables, batch submission, live polling, details, and retry controls. |
 | WebExtensions Manifest V3 | Cross-browser popup/content-script capture using `browser` or `chrome` APIs. |
 | Docker Compose | Local backend/n8n deployment, durable named volumes, resume/auth bind mounts, loopback publication. |
 | Jest 30 / ts-jest | Unit and integration-style tests, including local mock-form Playwright coverage. |
 
-No ORM, migration framework, queue, Redis, or separate frontend build is used. Schema creation and compatible migrations run inside `DatabaseService` at backend startup; processing is synchronous from the API caller's perspective.
+No ORM, external queue, Redis, or second database is used. Schema creation and compatible migrations run inside `DatabaseService`; the durable queue, leases, attempts, and events are SQLite tables. `POST /api/jobs/process` remains synchronous for the extension, while `POST /api/jobs/batches` is asynchronous for the dashboard.
 
 ## Data model and persistence
 
@@ -543,16 +522,26 @@ Copy `backend/.env.example` to `backend/.env`. Do not put real values into docum
 
 Boolean variables accept `1/true/yes/on` and `0/false/no/off`, case-insensitively. Invalid booleans and non-positive timeout/page/port values fail backend startup.
 
-### Google Sheets variables
+### Queue and retry variables
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `BATCH_CONCURRENCY` | `3` | Maximum concurrently claimed batch items. |
+| `EMAIL_WORKFLOW_CONCURRENCY` | `3` | Independent n8n/Gmail workflow limit. |
+| `FORM_WORKFLOW_CONCURRENCY` | `1` | Independent Playwright workflow limit. |
+| `QUEUE_POLL_INTERVAL_MS` | `1000` | SQLite queue polling interval. |
+| `QUEUE_LEASE_MS` | `300000` | Processing lease before safe reclaim. |
+| `WORKFLOW_RETRY_LIMIT` | `3` | Maximum attempts accepted by retry APIs. |
+
+### Legacy Google Sheets import variables
 
 | Variable | Default/example behavior | Purpose and constraints |
 |---|---|---|
-| `GOOGLE_SHEETS_SYNC_ENABLED` | `false` | Enables backend-owned form synchronization. n8n email tracking is independent. |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | project tracker ID | Spreadsheet ID containing only letters, digits, `_`, and `-`. Replace for a fork. |
 | `GOOGLE_SHEETS_TAB` | `Applications` | Non-empty tab name, maximum 100 characters. |
-| `GOOGLE_SHEETS_CREDENTIALS_PATH` | local service-account path | Recommended service-account JSON. The credential file is trusted local configuration. |
+| `GOOGLE_SHEETS_CREDENTIALS_PATH` | local service-account path | Read-only service-account JSON used only by the one-time import. |
 | `GOOGLE_SHEETS_ACCESS_TOKEN` | empty | Optional short-lived development alternative; never commit it. |
-| `GOOGLE_SHEETS_TIMEOUT_MS` | `15000` | Positive Sheets and OAuth request timeout. |
+| `GOOGLE_SHEETS_TIMEOUT_MS` | `15000` | Positive import/OAuth request timeout. |
 
 ### Compose-specific settings
 
@@ -570,9 +559,9 @@ Boolean variables accept `1/true/yes/on` and `0/false/no/off`, case-insensitivel
 - Node.js 22 and npm for direct backend development and tests. Node 22 is required by the image and built-in SQLite usage.
 - Firefox or Chrome/Chromium for the extension.
 - Chrome/Chromium on the host for the recommended persistent Google-auth capture.
-- Gmail and Google Sheets credentials configured in n8n for live email-draft tracking.
+- Gmail credentials configured in n8n for live email-draft creation.
 - A Gemini API key only if AI fallback answers are desired.
-- A Google service account shared with the tracker only if backend form synchronization is enabled.
+- A read-only Google service account only when importing historical tracker rows.
 - Resume/document files whose filenames match the catalogs and are readable through the configured directories.
 
 For Fedora, install Docker and the Compose plugin through the supported Docker/Fedora method, ensure the user can run Docker, and preserve the SELinux volume suffixes. Chrome command names commonly differ between `google-chrome-stable`, `google-chrome`, and `chromium`.
@@ -668,7 +657,7 @@ Open LinkedIn and expand “see more”, then select the desired job-post text b
 
 Shortened `lnkd.in` URLs remain visible in the editable preview and are resolved by the backend only after you click Send. Resolution permits only HTTPS, validates DNS results and every redirect destination against private/network-local ranges, limits redirect depth, response size, and duration, and reads LinkedIn's marked external destination from its safety-interstitial page. Failure keeps the original URL.
 
-Click Send. For email applications, the backend invokes n8n and returns the email workflow status. For Google Forms, it creates a durable workflow record, opens an isolated browser context, fills reliable profile-engine answers, uploads the selected resume, validates each page, and submits only when the form is eligible. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch; a durably failed email workflow is atomically retried by the next identical request, while a completed draft is reused without calling n8n again. SQLite also retains normalized form questions, answer provenance, submission attempts, evidence, and Sheets synchronization state; no per-application JSON files are created.
+Click Send. For email applications, the backend invokes n8n and records the draft outcome. For Google Forms, it creates a durable workflow record, opens an isolated browser context, fills reliable profile-engine answers, uploads the selected resume, validates each page, and submits only when the form is eligible. Combined applications contain independent email and form statuses, so one branch cannot prevent the other from being recorded or executed. Repeated captures are deduplicated independently per branch; completed work is reused. SQLite retains normalized form questions, answer provenance, workflow/form attempts, processing events, evidence, and retry decisions; no per-application JSON files are created.
 
 Form processing can take longer than the email flow. Keep the popup open while Send is running when you want to see the result immediately. The durable status is also available through `GET /api/jobs/:applicationId`.
 
@@ -682,13 +671,11 @@ Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in `backend/.env` before star
 
 Automatic submission requires both `FORM_AUTO_SUBMIT=true` and `verified.automationConsents.automaticSubmission=true`. Required legal declarations are never delegated to Gemini: add an exact normalized declaration label to `verified.automationConsents.legalDeclarations` only after you have explicitly chosen to accept it. CAPTCHA, authentication, inaccessible/closed forms, unsupported required controls, unresolved required facts, and failed validation stop with `needs_manual_action`. Once Submit has been clicked, missing confirmation evidence produces `submission_unknown`, which is never retried automatically.
 
-### Application history and tracker synchronization
+### Dashboard, batches, and application history
 
-`GET /api/jobs/:applicationId` returns the stored job metadata, original LinkedIn URL, resolved application URL, selected resume, independent workflows, normalized questions/answers, every form attempt, confirmation evidence, errors, and Sheets sync state. `POST /api/jobs/:applicationId/sync` retries only tracker synchronization and never repeats Gmail or form work.
+Run the frontend and open `http://127.0.0.1:3001`. It uses the NestJS API for every read and mutation. Bulk submissions are persisted before processing and return a batch ID immediately; bounded workers continue after the tab closes and reclaim safe work after a restart. The application detail API and UI show independent workflows, request/response payloads, normalized questions/answers, workflow and form attempts, evidence, screenshots, errors, durations, and real processing events.
 
-The backend can synchronize form outcomes to the existing **Pakistan Job Application Tracker** → **Applications** tab. Set `GOOGLE_SHEETS_SYNC_ENABLED=true` and place a service-account JSON file at `backend/data/playwright/google-service-account.json`, then share the spreadsheet with that service-account email. The file is ignored by Git and is available in Compose through the existing read/write authentication-state mount. n8n OAuth credentials remain encrypted inside n8n and are not copied or extracted.
-
-The backend adds only missing tracking columns: `Application ID`, `Application URL`, `Form Status`, `Form Updated At`, `Submission Evidence`, `Form Resume`, and `Form Notes`. It matches `Application ID` first, adopts an older n8n row by `Job Link` only when necessary, and then stores the stable ID. Existing `Status`, `Notes`, and manually populated shared fields are preserved. For mixed applications, n8n continues to own email-draft updates while the backend owns the form-specific columns.
+For a one-time migration from the old tracker, configure read-only Sheets credentials and call `POST /api/jobs/import/google-sheets`. The importer stores historical rows without executing Gmail or form automation. Remove the credentials afterward. New applications never read from or write to Google Sheets.
 
 The verified profile also records positive preferences for onsite work, relocation, night/different shifts, flexible hours, willingness to learn, and negotiable salary. These deterministic answers take priority over Gemini. Salary amounts still remain tied to configured seniority, currency, and monthly/annual periods; flexibility only permits the nearest listed range when the exact amount is unavailable.
 
@@ -732,7 +719,7 @@ The extension origin is allowed by CORS. Requests with no browser `Origin` heade
 
 ### `POST /api/jobs/process`
 
-Creates or reuses an application and executes each applicable branch. The endpoint waits for the branch work and optional Sheets sync to reach the result returned in this request; it is not a background-job enqueue endpoint.
+Creates or reuses an application and executes each applicable branch. This compatibility endpoint waits for branch work and remains the extension contract; dashboard bulk work uses the durable `POST /api/jobs/batches` endpoint instead.
 
 Request fields:
 
@@ -783,12 +770,23 @@ Representative response shape:
       "error": null
     },
     "form": null
-  },
-  "sheetsSync": null
+  }
 }
 ```
 
-The exact n8n response is stored and returned without a backend-owned response schema. The imported workflow's handled Gmail error path normally returns a 2xx payload with `status: gmail_failed`; the backend therefore records that call as workflow `completed` with outcome `gmail_failed`. Transport, timeout, or non-2xx n8n failures become backend email status `failed`. Form failures are also represented inside an HTTP 200 process response as `failed`, `needs_manual_action`, or `submission_unknown`. Callers must inspect each branch's `status`, `outcome`, `response`, and `error` rather than relying only on the HTTP code.
+The exact n8n response is stored with the workflow attempt. A handled `gmail_failed` response is converted to backend email status `failed`; transport, timeout, and non-2xx failures are also `failed`. Form failures are represented inside an HTTP 200 process response as `failed`, `needs_manual_action`, or `submission_unknown`. Callers must inspect each branch's status rather than relying only on the HTTP code.
+
+### Dashboard, batch, event, and retry endpoints
+
+- `POST /api/jobs/batches` persists `{entries, concurrency?, idempotencyKey?}` and returns `202` immediately.
+- `GET /api/jobs/dashboard` returns SQLite-backed aggregate counts, recent applications/activity, and batch totals.
+- `GET /api/jobs/applications` supports `page`, `pageSize`, `search`, `status`, `method`, `sort`, and `direction`.
+- `GET /api/jobs/batches` and `GET /api/jobs/batches/:batchId` return durable batch history and item outcomes.
+- `GET /api/jobs/events?after=<eventId>` supports efficient real-time polling without invented percentages.
+- `GET /api/jobs/failures` returns server-computed retry eligibility and reasons.
+- `POST /api/jobs/workflows/:workflowId/retry` and `POST /api/jobs/batches/:batchId/retry` queue safe retries with bounded backoff.
+- `GET /api/jobs/health` reports the local API, SQLite, and queue state.
+- `POST /api/jobs/import/google-sheets` performs the optional read-only historical import.
 
 ### `GET /api/jobs/:applicationId`
 
@@ -799,7 +797,8 @@ Returns the durable application projection:
 - ordered email/form workflow records with status, attempts, response, error, timestamps, and derived outcome;
 - latest normalized form questions/answers and answer provenance;
 - every form submission attempt, validation errors, screenshots, complete details, and confirmation evidence;
-- independent Sheets synchronization state.
+- immutable workflow attempts with request/response JSON, duration, errors, and idempotency keys;
+- ordered processing events and real stages.
 
 Application IDs contain colons; URL-encode them when constructing the path in clients that do not do so automatically:
 
@@ -809,14 +808,6 @@ curl --header 'X-API-Key: replace-with-your-local-token' \
 ```
 
 An unknown ID returns 404. This endpoint is the recovery/status interface after a popup timeout or close.
-
-### `POST /api/jobs/:applicationId/sync`
-
-Requests and immediately attempts only Google Sheets synchronization. It never invokes n8n, opens a browser, or changes an application workflow. Responses are the current `sheetsSync` record.
-
-- 404: application does not exist.
-- 503: `GOOGLE_SHEETS_SYNC_ENABLED` is false.
-- 200 with `status: failed`: the sync was attempted but its external error was caught and persisted; inspect `error` and retry later.
 
 ### `POST /api/forms/answers`
 
@@ -893,7 +884,7 @@ Codes map as follows: 400 → `VALIDATION_ERROR`, 401 → `UNAUTHORIZED`, 404 �
 - Server-side short-link fetches require credential-free HTTPS, resolve DNS before contact, reject private/local/link-local/reserved/documentation ranges, check every redirect, stop after five hops, enforce a total timeout, and bound interstitial content to 256 KiB.
 - Failed resolution is non-fatal and retains the original URL. This is safer than following an unverified destination, but it may leave classification incomplete.
 - Playwright intercepts every browser request and blocks unsafe protocols and private/local/reserved destinations. `data:`, `blob:`, and `about:` are allowed for browser operation. Localhost is allowed only by the test-only switch.
-- The configured n8n webhook is limited to explicit local hosts. Gemini and Sheets use fixed Google API origins; a service-account credential file and any `token_uri` inside it are trusted administrator-controlled input.
+- The configured n8n webhook is limited to explicit local hosts. Gemini and the optional legacy importer use fixed Google API origins; a service-account credential file and any `token_uri` inside it are trusted administrator-controlled input.
 
 DNS is checked before the resolver/browser request but the implementation does not pin the resolved address to the connection, so deployments should still run on a trusted local network with outbound controls if DNS rebinding is in scope.
 
@@ -911,7 +902,7 @@ DNS is checked before the resolver/browser request but the implementation does n
 - Retry claims are conditional SQL updates, so only one caller can reclaim the expected failed/manual state.
 - Form retries are permitted only when the stored audit does not show submission began.
 - A Submit click flips `submission.attempted` before interaction; later browser failure becomes `submission_unknown` and blocks automatic retry.
-- Completion requires positive confirmation evidence. n8n adds an independent tracker check before creating a draft.
+- Completion requires positive confirmation evidence. SQLite's unique application/workflow keys prevent n8n from being called again for a completed draft.
 
 These protections are process/data safeguards, not a distributed lock across unrelated installations. Running two separate databases against the same accounts can still create duplicates.
 
@@ -920,15 +911,15 @@ These protections are process/data safeguards, not a distributed lock across unr
 - SQLite WAL mode and transactional form-outcome writes preserve a coherent audit across crashes.
 - Generated profile suggestions and authentication state use temporary files plus atomic rename; profile writes are serialized in-process.
 - n8n and backend named volumes survive normal container recreation.
-- External side effects and local state cannot be committed in one transaction. A crash after Gmail draft creation but before n8n responds can leave the backend email workflow failed even though a draft exists; n8n's `Job Link` check is the compensating safeguard. A crash after form Submit is treated conservatively when the browser reports it, but a hard process/container failure at that instant still requires external verification.
+- External side effects and local state cannot be committed in one transaction. After restart, an interrupted email run becomes `needs_manual_action` because a draft may exist; a form interrupted during submit/verification becomes `submission_unknown`. Neither is automatically retried.
 - Back up the SQLite database, active profile, and n8n volume together when possible. Browser sessions and screenshots are sensitive and may be intentionally excluded from ordinary backups.
 
 ### Known security and reliability limits
 
 - Profile schema validation is shallow and does not prove every nested value is correctly typed or truthful.
 - URL/form recognition is regex/DOM-rule based and can drift as LinkedIn, Google Forms, or ATS pages change.
-- The API is synchronous and has no persistent queue or worker lease recovery for a backend process killed while a workflow is `processing`.
-- Email workflows marked `processing` are not automatically reclaimed after a crash; inspect SQLite/n8n and resolve deliberately. Sheets has a ten-minute stale-processing reclaim rule, but application workflows do not.
+- The extension endpoint is synchronous, but dashboard batches use a persistent SQLite queue with bounded concurrency and worker leases.
+- Hard crashes during external side effects still require conservative manual verification; the queue resumes only work that can be reclaimed safely.
 - The n8n parser/catalog and backend profile/catalog are separate configuration sources and can drift.
 - Screenshots and API history may contain answers and personally identifiable information.
 
@@ -951,19 +942,19 @@ The suite covers:
 
 - classification, identity, URL normalization, LinkedIn interstitial resolution, and safe fallback;
 - legacy schema migration, transactional question/attempt persistence, and answer-source normalization;
-- independent mixed email/form workflows, duplicate reuse, safe retry rules, uncertain submissions, metadata extraction, and sync-only retry;
+- independent mixed email/form workflows, duplicate reuse, safe retry rules, uncertain submissions, metadata extraction, durable batches, leases, attempts, and events;
 - verified/derived/memory/Gemini priority, conflicts, field-type adaptation, salary periods/ranges, work preferences, grounded Gemini reuse, and malformed model output;
 - resume/document upload, multi-page text/textarea/radio/checkbox/select/date handling, attachment verification, validation, and confirmation evidence;
 - first-time, persisted, expired, invalid, rejected, and external-CDP authentication behavior;
-- Sheets legacy-row adoption, stable-ID matching, append-once behavior, and preservation of manual/email-owned cells.
+- read-only legacy Sheets-row import without runtime tracker writes.
 
-Tests mock Gemini, n8n, and Sheets where appropriate. Live Gmail/Sheets credentials are not exercised, and the Playwright form tests start a disposable loopback HTTP fixture with the test-only localhost allowance.
+Tests mock Gemini, n8n, and the optional importer where appropriate. Live Gmail/Sheets credentials are not exercised, and the Playwright form tests start a disposable loopback HTTP fixture with the test-only localhost allowance.
 
 ### Safe manual testing strategy
 
 - Set `FORM_AUTO_SUBMIT=false` or set profile `automaticSubmission` to false when inspecting a real form; either gate prevents the final click after fields are populated.
 - Use a disposable form/account for end-to-end submission tests. Never use a production application as a test fixture.
-- The imported n8n workflow has no dry-run flag. Use a test Gmail account and test spreadsheet, leave credentials disconnected, or test its Code node separately before posting an email application to the live webhook.
+- The imported n8n workflow has no dry-run flag. Use a test Gmail account, leave credentials disconnected, or test its Code node separately before posting an email application to the live webhook.
 - Use the n8n test webhook only while its listener is armed. Remember that it can still execute live credentialed nodes.
 - Keep `FORM_ALLOW_LOCALHOST=false` outside the automated test configuration.
 
@@ -990,8 +981,8 @@ Tests mock Gemini, n8n, and Sheets where appropriate. Live Gmail/Sheets credenti
 - Resume file not found in Compose: edit both user-specific host paths in `compose.yaml`, keep `/files/resumes` as the container destination, and ensure catalog filenames match exactly.
 - Playwright browser launch fails locally: run `npx playwright install --with-deps chromium`; in Compose, rebuild the backend image so its bundled browser and system packages are installed.
 - Gemini answers remain unresolved: verify `GEMINI_API_KEY`, model availability, timeout, profile grounding, and backend logs. Missing Gemini is intentionally non-fatal.
-- Sheets sync is `failed`: verify the service-account file/access token, share the target spreadsheet with the service-account email, confirm spreadsheet/tab settings, then call the sync-only endpoint.
-- Form workflow is stuck at `processing` after a backend crash: there is no automatic application-workflow lease recovery. Inspect the form and SQLite state before any manual change or rerun to avoid duplicate submission.
+- Legacy Sheets import fails: verify the read-only service-account/access token and spreadsheet/tab settings; this does not affect new applications.
+- A restart interrupted external work: inspect `needs_manual_action` email runs and `submission_unknown` form runs before any manual action; the backend deliberately blocks unsafe retries.
 - LinkedIn markup changes: use manual text/link entry; no private endpoints or session cookies are used.
 - Form detection is rule-based. Unknown destinations use `needs_review`; image-only job ads need manual transcription.
 - Only Google Forms have an automation adapter. Other form platforms remain durable `needs_manual_action` workflows until their own adapters are implemented.
@@ -1000,7 +991,7 @@ Tests mock Gemini, n8n, and Sheets where appropriate. Live Gmail/Sheets credenti
 - CDP capture requires a desktop Chrome/Chromium instance on the same machine as the authentication CLI. It is intentionally restricted to loopback and is not a remote or container authentication mechanism.
 - Playwright screenshots for failures are written under the configured form-artifacts directory. They may contain application data, so keep that directory local and private.
 - An empty `API_TOKEN` is acceptable only while ports remain loopback-only. Configure a token and HTTPS before any broader exposure.
-- Live Gmail/Google Sheets credentials are not exercised by tests; the Sheets API is mocked so no tracker row is changed.
+- Live Gmail/Google Sheets credentials are not exercised by tests; the optional import API is mocked and never writes tracker rows.
 
 There is no separate roadmap or authoritative TODO file in the repository. The only future work explicitly supported by current documentation/code boundaries is signed/persistent extension distribution and additional `FormPlatformAdapter` implementations; other possible improvements should not be treated as committed plans.
 

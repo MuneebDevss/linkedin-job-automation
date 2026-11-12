@@ -7,7 +7,7 @@ The NestJS backend is the only endpoint the browser extension calls. It binds to
 Copy `.env.example` to `.env` for direct local development and Compose. Compose loads `backend/.env` through its backend `env_file` declaration. Important variables:
 
 - `DATABASE_PATH`: durable SQLite file. Compose stores it in the `backend_data` volume.
-- `N8N_WEBHOOK_URL`: existing n8n production or test webhook. The backend preserves its `{text, url, links, capturedAt}` contract.
+- `N8N_WEBHOOK_URL`: existing n8n production or test webhook. The backend adds durable `workflowId` and `idempotencyKey` fields to the original payload.
 - `API_TOKEN`: optional for a loopback-only setup. When set, send the same value through the extension's Backend API token field. It is required as the `X-API-Key` header.
 - `URL_RESOLUTION_TIMEOUT_MS` and `N8N_TIMEOUT_MS`: positive timeout values in milliseconds.
 - `FORM_AUTOMATION_ENABLED` and `FORM_AUTO_SUBMIT`: both must be true before a form can be submitted.
@@ -20,11 +20,10 @@ Copy `.env.example` to `.env` for direct local development and Compose. Compose 
 - `FORM_AUTH_CDP_URL`: optional, desktop-only, unauthenticated loopback HTTP origin for attaching to a separately launched Chrome instance with a dedicated profile. Do not configure or expose it in Docker.
 - `PLAYWRIGHT_HEADLESS`: keep enabled for normal backend operation. `PLAYWRIGHT_BROWSER_EXECUTABLE_PATH` can select an explicitly managed Chromium build.
 - `FORM_ALLOW_LOCALHOST`: exists for mock-form tests only and must remain false in normal operation.
-- `GOOGLE_SHEETS_SYNC_ENABLED`: enables backend-owned form tracking without changing the n8n email workflow.
-- `GOOGLE_SHEETS_SPREADSHEET_ID` and `GOOGLE_SHEETS_TAB`: default to the Pakistan Job Application Tracker and `Applications` tab.
-- `GOOGLE_SHEETS_CREDENTIALS_PATH`: service-account JSON path. Share only the tracker spreadsheet with its service-account email; credentials are never stored in application rows.
-- `GOOGLE_SHEETS_ACCESS_TOKEN`: optional short-lived development alternative to a credential file.
-- `GOOGLE_SHEETS_TIMEOUT_MS`: positive Sheets/OAuth request timeout.
+- `BATCH_CONCURRENCY`, `EMAIL_WORKFLOW_CONCURRENCY`, and `FORM_WORKFLOW_CONCURRENCY`: independent queue limits. Keep form concurrency low because each form uses a browser context.
+- `QUEUE_POLL_INTERVAL_MS` and `QUEUE_LEASE_MS`: durable SQLite queue polling and crash-recovery lease settings.
+- `WORKFLOW_RETRY_LIMIT`: maximum attempts accepted by the retry API.
+- `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_TAB`, and read-only credentials are optional and used only by the one-time legacy import. New tracking never reads from or writes to Sheets.
 
 Never publish port 3000 or 5678 on a non-loopback interface without authentication and HTTPS.
 
@@ -125,15 +124,24 @@ Resume-labeled fields use the existing role-matched `resumeCatalog`. Other uploa
 
 The file must exist inside `APPLICATION_DOCUMENTS_DIRECTORY`. Before submission, the adapter verifies the selected filename is present in the file input or Google Forms upload UI and that no upload progress indicator remains.
 
+## Dashboard and durable batch APIs
+
+- `POST /api/jobs/batches` — validates and persists 1–100 entries, then returns `202` with the batch ID before work starts. Optional `concurrency` is bounded by backend configuration and `idempotencyKey` deduplicates repeated submissions.
+- `GET /api/jobs/batches` and `GET /api/jobs/batches/:batchId` — persistent batch history, counters, inputs, application IDs, results, errors, and retries.
+- `POST /api/jobs/batches/:batchId/retry` — creates a new batch containing only failures that NestJS determines are safe to retry.
+- `GET /api/jobs/dashboard` — SQLite-backed application/workflow/batch totals plus recent activity.
+- `GET /api/jobs/applications` — searchable, filterable, sortable, paginated application list.
+- `GET /api/jobs/failures` — failed/manual/unknown workflows with server-computed retry eligibility.
+- `POST /api/jobs/workflows/:workflowId/retry` — queues one eligible workflow with bounded exponential backoff.
+- `GET /api/jobs/events?after=<id>` — efficient event polling. Events contain real stages, never fabricated percentages.
+- `GET /api/jobs/health` — local backend, queue, and SQLite connection status.
+- `POST /api/jobs/import/google-sheets` — optional one-time read-only import of legacy tracker rows. Imported rows are never executed as new applications.
+
+Queued work survives browser refreshes and backend restarts. Expired queue leases are reclaimed. Interrupted email draft creation becomes `needs_manual_action` because a draft may already exist; a form interrupted during submission/verification becomes `submission_unknown`. Neither is retried automatically.
+
 ## `GET /api/jobs/:applicationId`
 
-Returns job metadata and timestamps, original LinkedIn and application URLs, selected resume, independent workflow statuses, normalized form questions/answers, all submission attempts and evidence, errors, and independent `sheetsSync` state. URL-encode application IDs containing colons before constructing the request URL.
-
-## `POST /api/jobs/:applicationId/sync`
-
-Retries only Google Sheets synchronization for an existing application. It never executes n8n, opens a browser, or resubmits a form. A failed sync remains durable in SQLite and can be retried through this endpoint or a duplicate capture.
-
-The backend owns form-specific tracker columns and preserves n8n/manual values. It adds `Application ID`, `Application URL`, `Form Status`, `Form Updated At`, `Submission Evidence`, `Form Resume`, and `Form Notes` only when missing. Existing rows are matched by stable application ID; `Job Link` is used only to adopt a legacy n8n row and always remains the original LinkedIn URL. `Status` and `Notes` remain n8n/manual-owned.
+Returns job metadata and timestamps, original LinkedIn and application URLs, selected resume, independent workflow statuses, normalized form questions/answers, submission evidence, immutable workflow/form attempts, processing events, errors, request/response payloads, and durations. URL-encode application IDs containing colons before constructing the request URL. The legacy `sheetsSync` field may be present only for backward-compatible historical records and is never updated for new applications.
 
 ## `POST /api/forms/answers`
 

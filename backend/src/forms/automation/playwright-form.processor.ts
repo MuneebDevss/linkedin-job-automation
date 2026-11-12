@@ -8,7 +8,7 @@ import {ProfileStoreService} from '../../profile/profile-store.service';
 import {ApplicationDocumentProfile, ProfileDocument, ResumeProfile} from '../../profile/profile.types';
 import {AnswerEngineService} from '../answer-engine.service';
 import {AnswerValue, GeneratedAnswer} from '../answering.types';
-import {FormProcessingInput, FormProcessingResult, FormProcessor} from '../form-processor.interface';
+import {FormProcessingInput, FormProcessingResult, FormProcessor, FormProgressReporter} from '../form-processor.interface';
 import {FormAdapterRegistryService} from './form-adapter-registry.service';
 import {FormArtifactService} from './form-artifact.service';
 import {ExtractedFormQuestion, FillRecord, FormIssue} from './form-automation.types';
@@ -58,7 +58,8 @@ export class PlaywrightFormProcessor implements FormProcessor {
    * **Inputs:** `input` contains the job identity, post text, and discovered application-form URLs.
    * **Returns:** The completed, failed, or manual-action result with a detailed automation audit trail.
    */
-  async process(input: FormProcessingInput): Promise<FormProcessingResult> {
+  async process(input: FormProcessingInput, report?: FormProgressReporter): Promise<FormProcessingResult> {
+    report?.('processing', 'Opening the application form.');
     const details: AutomationDetails = {
       attempts: 0, pages: [], questions: [], filled: [], issues: [], screenshots: [], browserErrors: [], attachments: [],
       submission: {attempted: false}
@@ -84,7 +85,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
         return await this.browser.withIsolatedContext(input.jobId, async context => {
           const page = await context.newPage();
           this.recordBrowserErrors(page, details);
-          return this.run(input, url, adapter, page, details);
+          return this.run(input, url, adapter, page, details, report);
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -116,7 +117,8 @@ export class PlaywrightFormProcessor implements FormProcessor {
     url: string,
     adapter: FormPlatformAdapter,
     page: Page,
-    details: AutomationDetails
+    details: AutomationDetails,
+    report?: FormProgressReporter
   ): Promise<FormProcessingResult> {
     await page.goto(url, {waitUntil: 'domcontentloaded'});
     let blocker = await adapter.detectBlocker(page);
@@ -138,6 +140,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
       const pageIssues: FormIssue[] = [];
       const ordinary = snapshot.questions.filter(question =>
         question.controlKind !== 'file' && question.controlKind !== 'unsupported' && !question.legalDeclaration);
+      report?.('generating_answers', `Generating grounded answers for page ${pageIndex + 1}.`, {pageIndex});
       const generated = await this.answers.generate({
         job: {title: snapshot.title, description: input.text},
         questions: ordinary
@@ -150,6 +153,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
         };
       }
       const byQuestion = new Map<string, GeneratedAnswer>(generated.answers.map(answer => [answer.questionId, answer]));
+      report?.('filling_form', `Filling page ${pageIndex + 1}.`, {pageIndex, questions: snapshot.questions.length});
 
       for (const question of snapshot.questions) {
         if (question.controlKind === 'unsupported') {
@@ -181,6 +185,7 @@ export class PlaywrightFormProcessor implements FormProcessor {
           continue;
         }
         if (question.controlKind === 'file') {
+          report?.('uploading_resume', `Selecting an approved document for “${question.label}”.`, {questionId: question.id});
           const selected = this.selectAttachment(question.label, generated.resume?.resume || null, profile);
           if (!selected || (selected.kind === 'resume' && generated.resume.confidence === 'low')) {
             if (question.required) pageIssues.push({
@@ -274,7 +279,9 @@ export class PlaywrightFormProcessor implements FormProcessor {
           'Automatic submission is not enabled in both configuration and profile consent.');
       }
       details.submission = {attempted: true};
+      report?.('submitting_form', 'Submitting the completed form.');
       await adapter.clickAction(page, action);
+      report?.('verifying_submission', 'Verifying submission confirmation evidence.');
       const evidence = await adapter.detectSubmissionSuccess(page, this.config.get('formNavigationTimeoutMs', {infer: true}));
       if (!evidence) {
         const afterSubmit = await adapter.validate(page, snapshot.questions);

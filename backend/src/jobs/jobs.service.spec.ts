@@ -40,7 +40,8 @@ describe('JobsService', () => {
       database,
       n8n as unknown as N8nService,
       forms,
-      sheets as unknown as GoogleSheetsService
+      sheets as unknown as GoogleSheetsService,
+      new ConfigService({batchConcurrency: 3, emailWorkflowConcurrency: 3, formWorkflowConcurrency: 1}) as never
     );
   });
 
@@ -49,12 +50,9 @@ describe('JobsService', () => {
   it('forwards the unchanged webhook contract for email applications', async () => {
     const result = await service.process(base);
     expect(result.method).toBe('email');
-    expect(n8n.forward).toHaveBeenCalledWith({
-      text: base.text,
-      url: base.url,
-      links: [],
-      capturedAt: base.capturedAt
-    });
+    expect(n8n.forward).toHaveBeenCalledWith(expect.objectContaining({
+      text: base.text, url: base.url, links: [], capturedAt: base.capturedAt
+    }), expect.objectContaining({workflowId: expect.any(String), idempotencyKey: expect.any(String)}));
     expect(result.workflows.email).toMatchObject({status: 'completed', duplicate: false});
   });
 
@@ -168,18 +166,14 @@ describe('JobsService', () => {
     expect(forms.process).toHaveBeenCalledTimes(1);
   });
 
-  it('retries failed Sheets synchronization without repeating email or form work', async () => {
+  it('does not use Google Sheets for new application tracking', async () => {
     sheets.isEnabled.mockReturnValue(true);
-    sheets.sync
-      .mockRejectedValueOnce(new Error('temporary Sheets failure'))
-      .mockResolvedValueOnce({rowNumber: 4, operation: 'updated', updatedColumns: ['Form Status']});
     const input = {...base, links: ['https://forms.gle/example']};
 
-    const first = await service.process(input);
-    const repeated = await service.process(input);
+    await service.process(input);
+    await service.process(input);
 
-    expect(first.sheetsSync).toMatchObject({status: 'failed', attempts: 1});
-    expect(repeated.sheetsSync).toMatchObject({status: 'completed', attempts: 2, rowNumber: 4});
+    expect(sheets.sync).not.toHaveBeenCalled();
     expect(forms.process).toHaveBeenCalledTimes(1);
     expect(n8n.forward).toHaveBeenCalledTimes(1);
   });
